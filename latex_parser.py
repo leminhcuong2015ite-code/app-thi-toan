@@ -9,11 +9,16 @@ import urllib.request
 
 _TIKZ_CACHE = {}
 
-# Tự động tải các file .sty lẻ cần thiết (nhẹ vài chục KB) mà không cần cài texlive-latex-extra 1.5GB
-_EXTRA_FILES = {
+# Tự động tải các gói .sty chuyên dụng của giáo viên Toán về /tmp để dùng với texlive-pictures
+_CTAN_PACKAGES = {
     "tkz-tab.sty": "https://mirrors.ctan.org/macros/latex/contrib/tkz/tkz-tab/latex/tkz-tab.sty",
+    "tikz-3dplot.sty": "https://mirrors.ctan.org/graphics/pgf/contrib/tikz-3dplot/tikz-3dplot.sty",
+    "yhmath.sty": "https://mirrors.ctan.org/macros/latex/contrib/yhmath/yhmath.sty",
+    "diagbox.sty": "https://mirrors.ctan.org/macros/latex/contrib/diagbox/diagbox.sty",
+    "makecell.sty": "https://mirrors.ctan.org/macros/latex/contrib/makecell/makecell.sty",
 }
-for fname, url in _EXTRA_FILES.items():
+
+for fname, url in _CTAN_PACKAGES.items():
     fpath = f"/tmp/{fname}"
     if not os.path.exists(fpath):
         try:
@@ -68,51 +73,73 @@ def extract_braced_args(text, start_pos, num_args):
     return args, pos
 
 
-def compile_tikz_to_svg(tikz_code):
-    r"""Biên dịch TikZ sang SVG dùng lớp article chuẩn + dvisvgm cắt sát viền (không cần standalone.cls)"""
-    code_hash = hashlib.md5(tikz_code.encode("utf-8")).hexdigest()
+def compile_latex_snippet_to_svg(latex_snippet):
+    r"""Biên dịch khối TikZ hoặc bảng Tabular sang ảnh SVG sắc nét (kèm trọn bộ Preamble của bạn)"""
+    code_hash = hashlib.md5(latex_snippet.encode("utf-8")).hexdigest()
     if code_hash in _TIKZ_CACHE:
         return _TIKZ_CACHE[code_hash]
 
     if not shutil.which("latex"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu bộ biên dịch LaTeX.</div>'
 
-    tikz_code_fixed = tikz_code.replace(r'\vec', r'\overrightarrow')
+    # Chuẩn hóa các macro cá nhân thường xuất hiện trong hình vẽ / bảng biến thiên
+    snippet_fixed = latex_snippet
+    snippet_fixed = re.sub(r'\\(vec|vv)\b', r'\\overrightarrow', snippet_fixed)
+    snippet_fixed = snippet_fixed.replace(r'\ch@p', 'black')
 
-    use_tkz_tab = ("tkzTab" in tikz_code_fixed) and os.path.exists("/tmp/tkz-tab.sty")
-    extra_pkg = r"\usepackage{tkz-tab}" if use_tkz_tab else ""
+    # Chỉ nạp thêm các gói mở rộng nếu đoạn code thực sự gọi tới chúng
+    extra_pkgs = []
+    if "tkzTab" in snippet_fixed and os.path.exists("/tmp/tkz-tab.sty"):
+        extra_pkgs.append(r"\usepackage{tkz-tab}")
+    if "tdplot" in snippet_fixed and os.path.exists("/tmp/tikz-3dplot.sty"):
+        extra_pkgs.append(r"\usepackage{tikz-3dplot}")
+    if ("axis" in snippet_fixed or "addplot" in snippet_fixed):
+        extra_pkgs.append(r"\usepackage{pgfplots}\pgfplotsset{compat=newest}")
+        if "fill between" in snippet_fixed:
+            extra_pkgs.append(r"\usepgfplotslibrary{fillbetween}")
+    if "diagbox" in snippet_fixed and os.path.exists("/tmp/diagbox.sty"):
+        extra_pkgs.append(r"\usepackage{diagbox}")
+    if "makecell" in snippet_fixed and os.path.exists("/tmp/makecell.sty"):
+        extra_pkgs.append(r"\usepackage{makecell}")
 
-    # Dùng \documentclass{article} mặc định luôn có sẵn trong texlive-latex-base
+    # Preamble tích hợp đầy đủ thư viện TikZ và các macro từ file của bạn
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
-        r"\usepackage{amsmath,amssymb,amsfonts}" + "\n"
+        r"\usepackage{amsmath,amssymb,amsfonts,mathrsfs,xcolor,graphicx,array,multirow,multicol}" + "\n"
         r"\usepackage{tikz}" + "\n"
-        + extra_pkg + "\n"
-        r"\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings,decorations.pathreplacing}" + "\n"
+        + "\n".join(extra_pkgs) + "\n"
+        r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit,shapes.symbols}" + "\n"
+        r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
         r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
+        r"\providecommand{\wideparen}[1]{\widehat{#1}}" + "\n"
+        r"\providecommand{\R}{\mathbb{R}}" + "\n"
+        r"\providecommand{\N}{\mathbb{N}}" + "\n"
+        r"\providecommand{\Z}{\mathbb{Z}}" + "\n"
+        r"\providecommand{\Q}{\mathbb{Q}}" + "\n"
+        r"\providecommand{\C}{\mathbb{C}}" + "\n"
         r"\pagestyle{empty}" + "\n"
         r"\begin{document}" + "\n"
         r"\noindent" + "\n"
-        + tikz_code_fixed + "\n"
+        + snippet_fixed + "\n"
         r"\end{document}"
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        if use_tkz_tab:
-            shutil.copy("/tmp/tkz-tab.sty", os.path.join(tmpdir, "tkz-tab.sty"))
+        for fname in _CTAN_PACKAGES:
+            src_p = f"/tmp/{fname}"
+            if os.path.exists(src_p):
+                shutil.copy(src_p, os.path.join(tmpdir, fname))
 
         tex_file = os.path.join(tmpdir, "fig.tex")
         dvi_file = os.path.join(tmpdir, "fig.dvi")
-        pdf_file = os.path.join(tmpdir, "fig.pdf")
         svg_file = os.path.join(tmpdir, "fig.svg")
         log_file = os.path.join(tmpdir, "fig.log")
 
         with open(tex_file, "w", encoding="utf-8") as f:
             f.write(tex_doc)
         try:
-            # Ưu tiên 1: Dùng latex -> dvisvgm (cắt sát khung hình chuẩn xác bằng --bbox=min, nhúng thẳng font)
             if shutil.which("dvisvgm"):
                 subprocess.run(
                     ["latex", "-interaction=nonstopmode", "fig.tex"],
@@ -130,23 +157,11 @@ def compile_tikz_to_svg(tikz_code):
                         timeout=15
                     )
 
-            # Ưu tiên 2 (Dự phòng): Nếu dvisvgm chưa tạo được file, dùng pdflatex + pdf2svg
-            if not os.path.exists(svg_file) and shutil.which("pdflatex") and shutil.which("pdf2svg"):
-                subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
-                    cwd=tmpdir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=20
-                )
-                if os.path.exists(pdf_file):
-                    subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
-
             if os.path.exists(svg_file):
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
                 res_html = (
-                    f'<div style="text-align:center; margin: 12px 0;">'
+                    f'<div style="text-align:center; margin: 12px 0; overflow-x:auto;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
                     f'style="max-width:100%; height:auto; background:white; padding:10px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
                     f'</div>'
@@ -161,14 +176,14 @@ def compile_tikz_to_svg(tikz_code):
                             if line.startswith("!"):
                                 err_lines.append(line.strip())
                 err_msg = " | ".join(err_lines[:2]) if err_lines else "Không rõ nguyên nhân"
-                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi biên dịch TikZ: <code>{err_msg}</code></div>'
+                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi biên dịch hình/bảng: <code>{err_msg}</code></div>'
         except Exception as e:
             return f'<div style="color:red;font-size:13px;">Lỗi hệ thống khi vẽ TikZ: {e}</div>'
 
 
 def unwrap_immini(text):
-    r"""Tách cấu trúc immini của gói ex_test"""
-    pattern = re.compile(r'\\immini(?![a-zA-Z])')
+    r"""Tách cấu trúc \immini và \immini[thm] của gói ex_test"""
+    pattern = re.compile(r'\\immini(thm)?(?![a-zA-Z])')
     search_pos = 0
     while True:
         m = pattern.search(text, search_pos)
@@ -199,6 +214,8 @@ def replace_macro_one_arg(text, macro_name, prefix, suffix):
         inner = args[0]
         if macro_name in ('heva', 'hoac'):
             inner = re.sub(r'&\s*', '', inner)
+            # Xóa dòng trống hoặc \\ thừa ở cuối khối hệ phương trình
+            inner = re.sub(r'(\\\\)\s*$', '', inner.strip())
         replacement = prefix + inner + suffix
         text = text[:m.start()] + replacement + text[end_pos:]
         search_pos = m.start() + len(replacement)
@@ -206,19 +223,34 @@ def replace_macro_one_arg(text, macro_name, prefix, suffix):
 
 
 def normalize_math_internals(math_str):
-    r"""Làm sạch các lệnh bên trong môi trường toán học để MathJax hiển thị 100%"""
-    math_str = re.sub(r'\\(allowdisplaybreaks|displaystyle|limits|nolimits)\b', '', math_str)
+    r"""Chuẩn hóa mọi ký hiệu từ gói yhmath, esvect, mathrsfs, nexuss sang chuẩn MathJax"""
+    math_str = re.sub(r'\\(allowdisplaybreaks|displaystyle|limits|nolimits|boldmath)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
     math_str = math_str.replace('~', r'\,')
+
+    # Chuyển đổi gói esvect (\vv, \vv*) và yhmath (\wideparen)
+    math_str = re.sub(r'\\vv\*?\s*\{', r'\\overrightarrow{', math_str)
+    math_str = re.sub(r'\\vec\b', r'\\overrightarrow', math_str)
+    math_str = re.sub(r'\\wideparen\s*\{', r'\\widehat{', math_str)
+    math_str = re.sub(r'\\mathscr\s*\{', r'\\mathcal{', math_str)
+
+    # Các ký hiệu lượng giác và tập hợp số thường định nghĩa trong mypreamblee.tex
     math_str = re.sub(r'\\tg\b', r'\\tan', math_str)
     math_str = re.sub(r'\\cotg\b', r'\\cot', math_str)
     math_str = re.sub(r'\\arctg\b', r'\\arctan', math_str)
     math_str = re.sub(r'\\arccotg\b', r'\\operatorname{arccot}', math_str)
-    math_str = re.sub(r'\\wideparen\s*\{', r'\\widehat{', math_str)
-    math_str = re.sub(r'\\vec\b', r'\\overrightarrow', math_str)
-    math_str = replace_macro_one_arg(math_str, 'heva', r'\left\{\begin{aligned}', r'\end{aligned}\right.')
-    math_str = replace_macro_one_arg(math_str, 'hoac', r'\left[\begin{aligned}', r'\end{aligned}\right.')
+    math_str = re.sub(r'\\R\b', r'\\mathbb{R}', math_str)
+    math_str = re.sub(r'\\N\b', r'\\mathbb{N}', math_str)
+    math_str = re.sub(r'\\Z\b', r'\\mathbb{Z}', math_str)
+    math_str = re.sub(r'\\Q\b', r'\\mathbb{Q}', math_str)
+    math_str = re.sub(r'\\C\b', r'\\mathbb{C}', math_str)
+
+    # Xử lý lồng nhau nhiều cấp của \heva và \hoac bên trong công thức toán
+    for _ in range(3):
+        math_str = replace_macro_one_arg(math_str, 'heva', r'\left\{\begin{aligned}', r'\end{aligned}\right.')
+        math_str = replace_macro_one_arg(math_str, 'hoac', r'\left[\begin{aligned}', r'\end{aligned}\right.')
+
     math_str = re.sub(r'\\begin\{(eqnarray\*|eqnarray|align\*|align)\}', r'\\begin{aligned}', math_str)
     math_str = re.sub(r'\\end\{(eqnarray\*|eqnarray|align\*|align)\}', r'\\end{aligned}', math_str)
     return math_str
@@ -229,21 +261,34 @@ def clean_latex_to_markdown(text):
     if not text:
         return ""
 
+    # 1. Giải nén \immini và \multicols
     text = unwrap_immini(text)
+    text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
-    tikz_pattern = re.compile(r'\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}', re.DOTALL)
-    tikz_placeholders = {}
+    # 2. Biên dịch cả khối TikZ và bảng Tabular/Tabvar sang ảnh SVG
+    visual_pattern = re.compile(
+        r'\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
+        re.DOTALL
+    )
+    visual_placeholders = {}
 
-    def _tikz_repl(match):
+    def _visual_repl(match):
         code = match.group(0)
-        key = f"@@TIKZ_{hashlib.md5(code.encode()).hexdigest()}@@"
-        tikz_placeholders[key] = compile_tikz_to_svg(code)
+        key = f"@@VISUAL_{hashlib.md5(code.encode()).hexdigest()}@@"
+        visual_placeholders[key] = compile_latex_snippet_to_svg(code)
         return key
 
-    text = tikz_pattern.sub(_tikz_repl, text)
+    text = visual_pattern.sub(_visual_repl, text)
 
-    text = re.sub(r'\\begin\{center\}|\\end\{center\}', '', text)
-    text = re.sub(r'\\noindent|\\par\b|\\allowdisplaybreaks', '', text)
+    # 3. Xóa các lệnh căn chỉnh bố cục không cần thiết trên web
+    text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
+    text = re.sub(r'\\(noindent|par|centering|leavevmode|vfill|hfill|newpage|clearpage)\b', '', text)
+    text = re.sub(r'\\(vspace|hspace)\*?\{.*?\}', ' ', text)
+
+    # 4. Nếu người viết gõ \heva{...} hoặc \hoac{...} ở ngoài dấu $...$, tự động bọc vào $$...$$
+    # Đầu tiên, bảo vệ các khối toán đã có sẵn $...$ hoặc $$...$$ hoặc \[...\]
+    text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
 
     for env in ['aligned', 'align*', 'align', 'eqnarray*', 'eqnarray', 'gather*', 'gather']:
         esc_env = re.escape(env)
@@ -254,9 +299,7 @@ def clean_latex_to_markdown(text):
             flags=re.DOTALL
         )
 
-    text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
-    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
-
+    # 5. Xử lý danh sách \begin{itemchoice} trong lời giải Đúng/Sai
     if r'\begin{itemchoice}' in text:
         text = text.replace(r'\begin{itemchoice}', '').replace(r'\end{itemchoice}', '')
         parts = re.split(r'\\itemch\b', text)
@@ -269,12 +312,19 @@ def clean_latex_to_markdown(text):
 
     text = re.sub(r'\\begin\{(enumerate|itemize)\}(\[.*?\])?', '', text)
     text = re.sub(r'\\end\{(enumerate|itemize)\}', '', text)
-    text = re.sub(r'\\item\b', '\n- ', text)
+    text = re.sub(r'\\item\b(\s*\[.*?\])?', '\n- ', text)
 
-    text = replace_macro_one_arg(text, 'textbf', '**', '**')
-    text = replace_macro_one_arg(text, 'textit', '*', '*')
-    text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
+    # 6. Chuyển đổi các lệnh định dạng chữ tiếng Việt
+    for _ in range(2):
+        text = replace_macro_one_arg(text, 'textbf', '**', '**')
+        text = replace_macro_one_arg(text, 'indam', '**', '**')
+        text = replace_macro_one_arg(text, 'textit', '*', '*')
+        text = replace_macro_one_arg(text, 'innghieng', '*', '*')
+        text = replace_macro_one_arg(text, 'emph', '*', '*')
+        text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
+        text = replace_macro_one_arg(text, 'fbox', '`', '`')
 
+    # 7. Bảo vệ và chuẩn hóa bên trong toàn bộ khối toán học $$...$$ và $...$
     math_blocks = {}
 
     def _save_display_math(m):
@@ -292,14 +342,22 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\$\$(.*?)\$\$', _save_display_math, text, flags=re.DOTALL)
     text = re.sub(r'\$(?!\$)(.*?)\$', _save_inline_math, text, flags=re.DOTALL)
 
+    # Nếu còn sót \heva hoặc \hoac nằm ngoài dấu $...$, chuyển thành khối toán $$...$$
+    if r'\heva' in text or r'\hoac' in text:
+        text = replace_macro_one_arg(text, 'heva', r'$$\left\{\begin{aligned}', r'\end{aligned}\right.$$')
+        text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
+
+    # 8. Làm sạch phần văn bản thường bên ngoài công thức toán
     text = text.replace('{,}', ',').replace('~', ' ')
+    text = text.replace('``', '"').replace("''", '"')
     text = re.sub(r'\\\\(\s*\[.*?\])?', '  \n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
 
+    # 9. Khôi phục toàn bộ công thức toán và hình vẽ
     for k, val in math_blocks.items():
         text = text.replace(k, val)
 
-    for key, svg_html in tikz_placeholders.items():
+    for key, svg_html in visual_placeholders.items():
         text = text.replace(key, f"\n\n{svg_html}\n\n")
 
     text = re.sub(r'\n{3,}', '\n\n', text)
