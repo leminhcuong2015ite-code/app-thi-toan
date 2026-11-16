@@ -6,6 +6,9 @@ import subprocess
 import tempfile
 import shutil
 
+# Lưu tạm các hình TikZ đã biên dịch trong bộ nhớ để không phải chạy lại pdflatex nhiều lần
+_TIKZ_CACHE = {}
+
 
 def extract_braced_args(text, start_pos, num_args):
     r"""Tách chính xác các cặp ngoặc nhọn {...} có lồng nhau trong LaTeX"""
@@ -54,7 +57,11 @@ def extract_braced_args(text, start_pos, num_args):
 
 
 def compile_tikz_to_svg(tikz_code):
-    r"""Biên dịch TikZ sang ảnh SVG độc lập (Base64)"""
+    r"""Biên dịch TikZ sang ảnh SVG độc lập (Base64) có bộ nhớ đệm"""
+    code_hash = hashlib.md5(tikz_code.encode("utf-8")).hexdigest()
+    if code_hash in _TIKZ_CACHE:
+        return _TIKZ_CACHE[code_hash]
+
     if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
@@ -79,77 +86,82 @@ def compile_tikz_to_svg(tikz_code):
             f.write(tex_doc)
         try:
             subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
+                ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "fig.tex"],
                 cwd=tmpdir,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=20
+                timeout=12
             )
             if os.path.exists(pdf_file):
-                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
+                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=8)
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
-                return (
+                res_html = (
                     f'<div style="text-align:center; margin: 12px 0;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
                     f'style="max-width:100%; height:auto; background:white; padding:8px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
                     f'</div>'
                 )
+                _TIKZ_CACHE[code_hash] = res_html
+                return res_html
         except Exception as e:
             return f'<div style="color:red;font-size:13px;">Lỗi biên dịch TikZ: {e}</div>'
     return '<div style="color:red;font-size:13px;">Không thể tạo hình TikZ.</div>'
 
 
 def unwrap_immini(text):
-    r"""Tách cấu trúc immini của gói ex_test"""
+    r"""Tách cấu trúc immini của gói ex_test (chống lặp vô tận nếu thiếu ngoặc)"""
     pattern = re.compile(r'\\immini(?![a-zA-Z])')
+    search_pos = 0
     while True:
-        m = pattern.search(text)
+        m = pattern.search(text, search_pos)
         if not m:
             break
         args, end_pos = extract_braced_args(text, m.end(), 2)
         if len(args) < 2:
-            break
+            search_pos = m.end()
+            continue
         combined = args[0] + "\n\n" + args[1]
         text = text[:m.start()] + combined + text[end_pos:]
+        search_pos = m.start() + len(combined)
     return text
 
 
 def replace_macro_one_arg(text, macro_name, prefix, suffix):
-    r"""Thay thế các macro có 1 đối số"""
+    r"""Thay thế các macro có 1 đối số (an toàn, không bao giờ lặp vô tận)"""
     pattern = re.compile(r'\\' + macro_name + r'(?![a-zA-Z])')
+    search_pos = 0
     while True:
-        m = pattern.search(text)
+        m = pattern.search(text, search_pos)
         if not m:
             break
         args, end_pos = extract_braced_args(text, m.end(), 1)
         if not args:
-            break
+            search_pos = m.end()
+            continue
         inner = args[0]
         if macro_name in ('heva', 'hoac'):
             inner = re.sub(r'&\s*', '', inner)
-        text = text[:m.start()] + prefix + inner + suffix + text[end_pos:]
+        replacement = prefix + inner + suffix
+        text = text[:m.start()] + replacement + text[end_pos:]
+        search_pos = m.start() + len(replacement)
     return text
 
 
 def normalize_math_internals(math_str):
     r"""Làm sạch các lệnh bên trong môi trường toán học để MathJax hiển thị 100%"""
-    # Xóa các lệnh căn chỉnh LaTeX không tồn tại trong MathJax
     math_str = re.sub(r'\\(allowdisplaybreaks|displaystyle|limits|nolimits)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
     math_str = math_str.replace('~', r'\,')
-    # Đổi ký hiệu lượng giác kiểu cũ sang chuẩn MathJax
     math_str = re.sub(r'\\tg\b', r'\\tan', math_str)
     math_str = re.sub(r'\\cotg\b', r'\\cot', math_str)
     math_str = re.sub(r'\\arctg\b', r'\\arctan', math_str)
     math_str = re.sub(r'\\arccotg\b', r'\\operatorname{arccot}', math_str)
     math_str = re.sub(r'\\wideparen\s*\{', r'\\widehat{', math_str)
     math_str = re.sub(r'\\vec\b', r'\\overrightarrow', math_str)
-    # Xử lý \heva và \hoac lồng bên trong công thức
     math_str = replace_macro_one_arg(math_str, 'heva', r'\left\{\begin{aligned}', r'\end{aligned}\right.')
     math_str = replace_macro_one_arg(math_str, 'hoac', r'\left[\begin{aligned}', r'\end{aligned}\right.')
-    # Đổi eqnarray* hoặc align* thành aligned
     math_str = re.sub(r'\\begin\{(eqnarray\*|eqnarray|align\*|align)\}', r'\\begin{aligned}', math_str)
     math_str = re.sub(r'\\end\{(eqnarray\*|eqnarray|align\*|align)\}', r'\\end{aligned}', math_str)
     return math_str
@@ -160,10 +172,8 @@ def clean_latex_to_markdown(text):
     if not text:
         return ""
 
-    # 1. Giải nén \immini
     text = unwrap_immini(text)
 
-    # 2. Biên dịch các khối TikZ
     tikz_pattern = re.compile(r'\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}', re.DOTALL)
     tikz_placeholders = {}
 
@@ -175,11 +185,9 @@ def clean_latex_to_markdown(text):
 
     text = tikz_pattern.sub(_tikz_repl, text)
 
-    # 3. Xóa các lệnh bố cục thừa
     text = re.sub(r'\\begin\{center\}|\\end\{center\}', '', text)
     text = re.sub(r'\\noindent|\\par\b|\\allowdisplaybreaks', '', text)
 
-    # 4. Chuyển đổi các môi trường toán học độc lập (không bọc $ bên ngoài) thành $$...$$
     for env in ['aligned', 'align*', 'align', 'eqnarray*', 'eqnarray', 'gather*', 'gather']:
         esc_env = re.escape(env)
         text = re.sub(
@@ -189,11 +197,9 @@ def clean_latex_to_markdown(text):
             flags=re.DOTALL
         )
 
-    # Chuyển \[ ... \] và \( ... \) sang $$...$$ và $...$
     text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
 
-    # 5. Xử lý danh sách \begin{itemchoice} trong lời giải Đúng/Sai
     if r'\begin{itemchoice}' in text:
         text = text.replace(r'\begin{itemchoice}', '').replace(r'\end{itemchoice}', '')
         parts = re.split(r'\\itemch\b', text)
@@ -204,18 +210,15 @@ def clean_latex_to_markdown(text):
             new_text += f"\n\n- **{lbl}** {p.strip()}"
         text = new_text
 
-    # Xử lý môi trường enumerate / itemize nếu có trong lời giải
     text = re.sub(r'\\begin\{(enumerate|itemize)\}(\[.*?\])?', '', text)
     text = re.sub(r'\\end\{(enumerate|itemize)\}', '', text)
     text = re.sub(r'\\item\b', '\n- ', text)
 
-    # 6. Chuyển đổi định dạng chữ bên ngoài công thức
+    # Xử lý \heva và \hoac nếu nằm ngoài dấu $ (tự bọc công thức)
     text = replace_macro_one_arg(text, 'textbf', '**', '**')
     text = replace_macro_one_arg(text, 'textit', '*', '*')
     text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
-    text = replace_macro_one_arg(text, 'dfrac', r'\dfrac{', '}')
 
-    # 7. Bảo vệ và chuẩn hóa bên trong toàn bộ khối toán học $$...$$ và $...$
     math_blocks = {}
 
     def _save_display_math(m):
@@ -233,21 +236,16 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\$\$(.*?)\$\$', _save_display_math, text, flags=re.DOTALL)
     text = re.sub(r'\$(?!\$)(.*?)\$', _save_inline_math, text, flags=re.DOTALL)
 
-    # 8. Xử lý văn bản thường bên ngoài công thức toán
     text = text.replace('{,}', ',').replace('~', ' ')
     text = re.sub(r'\\\\(\s*\[.*?\])?', '  \n', text)
-    # Ngăn Markdown hiểu nhầm các ký tự đặc biệt ở văn bản thường
     text = text.replace(r'\%', '%').replace(r'\&', '&')
 
-    # 9. Khôi phục toàn bộ công thức toán đã chuẩn hóa
     for k, val in math_blocks.items():
         text = text.replace(k, val)
 
-    # 10. Khôi phục hình ảnh TikZ
     for key, svg_html in tikz_placeholders.items():
         text = text.replace(key, f"\n\n{svg_html}\n\n")
 
-    # Dọn dẹp dòng trống thừa
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -262,7 +260,6 @@ def parse_single_ex(ex_body, index):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
-    # Phần II: \choiceTF
     tf_match = re.search(r'\\choiceTF(?![a-zA-Z])', ex_body)
     if tf_match:
         stem_raw = ex_body[:tf_match.start()]
@@ -284,7 +281,6 @@ def parse_single_ex(ex_body, index):
             "solution": clean_latex_to_markdown(loigiai_raw)
         }
 
-    # Phần I: \choice
     mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
     if mc_match:
         stem_raw = ex_body[:mc_match.start()]
@@ -306,7 +302,6 @@ def parse_single_ex(ex_body, index):
             "solution": clean_latex_to_markdown(loigiai_raw)
         }
 
-    # Phần III: \shortans
     sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
     if sa_match:
         brace_pos = ex_body.find('{', sa_match.start())
