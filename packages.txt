@@ -3,3 +3,4 @@ texlive-latex-recommended
 texlive-fonts-recommended
 texlive-pictures
 texlive-lang-other
+pdf2svg
