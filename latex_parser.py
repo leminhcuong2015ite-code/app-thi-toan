@@ -5,9 +5,20 @@ import hashlib
 import subprocess
 import tempfile
 import shutil
+import urllib.request
 
-# Lưu tạm các hình TikZ đã biên dịch trong bộ nhớ để không phải chạy lại pdflatex nhiều lần
 _TIKZ_CACHE = {}
+
+# Tự động tải sẵn file tkz-tab.sty nhẹ (35KB) về máy chủ nếu đề thi có Bảng biến thiên
+_TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
+if not os.path.exists(_TKZ_TAB_PATH):
+    try:
+        urllib.request.urlretrieve(
+            "https://mirrors.ctan.org/macros/latex/contrib/tkz/tkz-tab/latex/tkz-tab.sty",
+            _TKZ_TAB_PATH
+        )
+    except Exception:
+        pass
 
 
 def extract_braced_args(text, start_pos, num_args):
@@ -57,7 +68,7 @@ def extract_braced_args(text, start_pos, num_args):
 
 
 def compile_tikz_to_svg(tikz_code):
-    r"""Biên dịch TikZ sang ảnh SVG độc lập (Base64) có bộ nhớ đệm"""
+    r"""Biên dịch TikZ sang ảnh SVG (Khôi phục cơ chế nonstopmode mượt mà như bản đầu)"""
     code_hash = hashlib.md5(tikz_code.encode("utf-8")).hexdigest()
     if code_hash in _TIKZ_CACHE:
         return _TIKZ_CACHE[code_hash]
@@ -65,35 +76,48 @@ def compile_tikz_to_svg(tikz_code):
     if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
-    extra_pkg = r"\usepackage{tkz-tab}" if "tkzTab" in tikz_code else ""
+    # Chuẩn hóa một số lệnh thường dùng trong hình TikZ của giáo viên Toán VN
+    tikz_code_fixed = tikz_code.replace(r'\vec', r'\overrightarrow')
 
+    use_tkz_tab = ("tkzTab" in tikz_code_fixed) and os.path.exists(_TKZ_TAB_PATH)
+    extra_pkg = r"\usepackage{tkz-tab}" if use_tkz_tab else ""
+
+    # Bỏ thư viện 'babel' trong tikzlibrary vì babel rất hay gây lỗi ký tự $ và active char trong TikZ
     tex_doc = (
         r"\documentclass[tikz,border=4pt]{standalone}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
-        r"\usepackage{amsmath,amssymb}" + "\n"
+        r"\usepackage{amsmath,amssymb,amsfonts}" + "\n"
         + extra_pkg + "\n"
-        r"\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings,decorations.pathreplacing,babel}" + "\n"
+        r"\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings,decorations.pathreplacing}" + "\n"
+        r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
+        r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\begin{document}" + "\n"
-        + tikz_code + "\n"
+        + tikz_code_fixed + "\n"
         r"\end{document}"
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        if use_tkz_tab:
+            shutil.copy(_TKZ_TAB_PATH, os.path.join(tmpdir, "tkz-tab.sty"))
+
         tex_file = os.path.join(tmpdir, "fig.tex")
         pdf_file = os.path.join(tmpdir, "fig.pdf")
         svg_file = os.path.join(tmpdir, "fig.svg")
+        log_file = os.path.join(tmpdir, "fig.log")
+
         with open(tex_file, "w", encoding="utf-8") as f:
             f.write(tex_doc)
         try:
+            # QUAN TRỌNG: Không dùng -halt-on-error để pdflatex tự vượt qua các warning nhỏ như bản đầu tiên
             subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "fig.tex"],
+                ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
                 cwd=tmpdir,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=12
+                timeout=20
             )
             if os.path.exists(pdf_file):
-                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=8)
+                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
                 res_html = (
@@ -104,13 +128,22 @@ def compile_tikz_to_svg(tikz_code):
                 )
                 _TIKZ_CACHE[code_hash] = res_html
                 return res_html
+            else:
+                # Nếu vẫn không tạo được PDF, trích xuất dòng lỗi thực sự trong file .log để biết thiếu gì
+                err_lines = []
+                if os.path.exists(log_file):
+                    with open(log_file, "r", encoding="utf-8", errors="ignore") as lf:
+                        for line in lf:
+                            if line.startswith("!"):
+                                err_lines.append(line.strip())
+                err_msg = " | ".join(err_lines[:2]) if err_lines else "Không rõ nguyên nhân"
+                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi biên dịch TikZ: <code>{err_msg}</code></div>'
         except Exception as e:
-            return f'<div style="color:red;font-size:13px;">Lỗi biên dịch TikZ: {e}</div>'
-    return '<div style="color:red;font-size:13px;">Không thể tạo hình TikZ.</div>'
+            return f'<div style="color:red;font-size:13px;">Lỗi hệ thống khi vẽ TikZ: {e}</div>'
 
 
 def unwrap_immini(text):
-    r"""Tách cấu trúc immini của gói ex_test (chống lặp vô tận nếu thiếu ngoặc)"""
+    r"""Tách cấu trúc immini của gói ex_test"""
     pattern = re.compile(r'\\immini(?![a-zA-Z])')
     search_pos = 0
     while True:
@@ -128,7 +161,7 @@ def unwrap_immini(text):
 
 
 def replace_macro_one_arg(text, macro_name, prefix, suffix):
-    r"""Thay thế các macro có 1 đối số (an toàn, không bao giờ lặp vô tận)"""
+    r"""Thay thế các macro có 1 đối số (an toàn, không lặp vô tận)"""
     pattern = re.compile(r'\\' + macro_name + r'(?![a-zA-Z])')
     search_pos = 0
     while True:
@@ -214,7 +247,6 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\\end\{(enumerate|itemize)\}', '', text)
     text = re.sub(r'\\item\b', '\n- ', text)
 
-    # Xử lý \heva và \hoac nếu nằm ngoài dấu $ (tự bọc công thức)
     text = replace_macro_one_arg(text, 'textbf', '**', '**')
     text = replace_macro_one_arg(text, 'textit', '*', '*')
     text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
