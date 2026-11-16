@@ -95,9 +95,9 @@ def generate_feedback(total, s1, s2, s3, n1, n2, n3):
         comments.append("- **Phần III (Trả lời ngắn):** Cần rèn luyện thêm kỹ năng giải toán thực tế và làm tròn số chính xác.")
     return "\n".join(comments)
 
-# ================= COMPONENT GIÁM SÁT (WEBCAM 5 PHÚT & ĐẾM GIỜ & CHỐNG CHUYỂN TAB) =================
-def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission_id):
-    """Nhúng đồng hồ đếm ngược, cảnh báo chuyển tab và tự động chụp webcam mỗi 5 phút gửi thẳng về Supabase"""
+# ================= COMPONENT GIÁM SÁT (CHUẨN 5 PHÚT, KHÔNG TẢI LẠI KHI CHỌN ĐÁP ÁN) =================
+def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_id):
+    """Nhúng đồng hồ đếm ngược, cảnh báo chuyển tab và tự động chụp webcam chuẩn mỗi 5 phút"""
     html_code = f"""
     <div style="display:flex; align-items:center; justify-content:space-between; background:#1e293b; color:white; padding:10px 18px; border-radius:8px; font-family:sans-serif;">
         <div>
@@ -108,7 +108,7 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
             </span>
         </div>
         <div style="display:flex; align-items:center; gap:10px;">
-            <span style="font-size:12px; color:#94a3b8;" id="cam_status">📷 Camera giám sát: Đang bật (tự động lưu mỗi 5 phút)</span>
+            <span style="font-size:12px; color:#94a3b8;" id="cam_status">📷 Camera giám sát: Đang bật (chu kỳ 5 phút/lần)</span>
             <video id="webcam" autoplay playsinline muted width="85" height="64" style="border-radius:6px; border:2px solid #22c55e; object-fit:cover;"></video>
             <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
         </div>
@@ -118,7 +118,10 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
     const SUPABASE_URL = "{supabase_url}";
     const SUPABASE_KEY = "{supabase_key}";
     const SUB_ID = {submission_id};
-    let timeLeft = {int(remaining_seconds)};
+    const END_TIME_MS = {int(end_timestamp_ms)};
+    const INTERVAL_MS = 300000; // Chuẩn 5 phút = 300.000 ms
+    const STORAGE_KEY = "last_snap_sub_" + SUB_ID;
+
     let tabSwitches = 0;
     let snapshots = [];
 
@@ -156,14 +159,14 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
         }} catch (e) {{ console.error(e); }}
     }}
 
-    // 3. Đồng hồ đếm ngược
+    // 3. Đồng hồ đếm ngược tính theo mốc giờ cố định END_TIME_MS
     const timerEl = document.getElementById("timer");
     const countdown = setInterval(() => {{
+        let timeLeft = Math.floor((END_TIME_MS - Date.now()) / 1000);
         if (timeLeft <= 0) {{
             clearInterval(countdown);
             timerEl.innerText = "00:00 (HẾT GIỜ)";
             timerEl.style.color = "#ef4444";
-            // Tự động bấm nút Nộp bài trên giao diện Streamlit
             const buttons = window.parent.document.querySelectorAll('button');
             buttons.forEach(btn => {{
                 if (btn.innerText.includes("NỘP BÀI HOÀN TẤT")) btn.click();
@@ -174,7 +177,6 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
         let s = timeLeft % 60;
         timerEl.innerText = `${{String(m).padStart(2, '0')}}:${{String(s).padStart(2, '0')}}`;
         if (timeLeft < 300) timerEl.style.color = "#f97316";
-        timeLeft--;
     }}, 1000);
 
     // 4. Phát hiện chuyển Tab / Thu nhỏ cửa sổ
@@ -188,7 +190,7 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
         }}
     }});
 
-    // 5. Khởi tạo Webcam & Chụp tự động mỗi 5 phút (300.000 ms)
+    // 5. Khởi tạo Webcam & Kiểm tra nghiêm ngặt chu kỳ 5 phút
     const video = document.getElementById("webcam");
     const canvas = document.getElementById("canvas");
     const camStatus = document.getElementById("cam_status");
@@ -196,25 +198,30 @@ def render_proctor_bar(remaining_seconds, supabase_url, supabase_key, submission
     navigator.mediaDevices.getUserMedia({{ video: true, audio: false }})
         .then(stream => {{
             video.srcObject = stream;
-            // Chụp tấm đầu tiên sau 5 giây khi vừa vào thi
-            setTimeout(captureFrame, 5000);
-            // Sau đó cứ mỗi 5 phút (300000ms) chụp 1 lần
-            setInterval(captureFrame, 300000);
+            // Kiểm tra mỗi 5 giây xem đã đủ 5 phút kể từ lần chụp trước chưa
+            setInterval(checkAndCapture, 5000);
         }})
         .catch(err => {{
             camStatus.innerText = "❌ Không tìm thấy Camera hoặc bị từ chối quyền!";
             camStatus.style.color = "#ef4444";
         }});
 
-    function captureFrame() {{
-        if (!video.srcObject) return;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.55); // Nén nhẹ JPEG để lưu nhanh
-        const nowStr = new Date().toLocaleTimeString("vi-VN");
-        snapshots.push({{ time: nowStr, img: dataUrl }});
-        updateSupabaseProctor({{ snapshots: snapshots }});
-        camStatus.innerText = "📷 Đã chụp tự động lúc " + nowStr;
+    function checkAndCapture() {{
+        if (!video.srcObject || video.readyState < 2) return;
+        const now = Date.now();
+        const lastSnap = parseInt(localStorage.getItem(STORAGE_KEY) || "0", 10);
+
+        // Chỉ chụp nếu chưa chụp lần nào (lastSnap == 0) hoặc đã qua đủ 5 phút (300.000 ms)
+        if (lastSnap === 0 || (now - lastSnap) >= INTERVAL_MS) {{
+            localStorage.setItem(STORAGE_KEY, now.toString());
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.55);
+            const nowStr = new Date().toLocaleTimeString("vi-VN");
+            snapshots.push({{ time: nowStr, img: dataUrl }});
+            updateSupabaseProctor({{ snapshots: snapshots }});
+            camStatus.innerText = "📷 Đã chụp tự động lúc " + nowStr + " (5 phút/lần)";
+        }}
     }}
     </script>
     """
@@ -471,8 +478,9 @@ elif st.session_state.role == "student":
 
     # ---------------- TRƯỜNG HỢP 1: ĐANG LÀM BÀI ----------------
     if submission["status"] == "in_progress":
+        end_timestamp_ms = int((started_at.timestamp() + exam["duration"] * 60) * 1000)
         render_proctor_bar(
-            remaining_sec,
+            end_timestamp_ms,
             st.secrets["SUPABASE_URL"],
             st.secrets["SUPABASE_KEY"],
             submission["id"]
