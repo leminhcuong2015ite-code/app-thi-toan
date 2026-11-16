@@ -1,14 +1,15 @@
 import re
 import os
 import base64
+import hashlib
 import subprocess
 import tempfile
 import shutil
 import urllib.request
+from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V3.0 - Direct PDF Crop & Zero Codeblock"
+PARSER_VERSION = "V4.0 - KNTT Tagging & Direct PDF Crop"
 
-# Tải sẵn tkz-tab.sty nhẹ cho bảng biến thiên
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
     try:
@@ -77,7 +78,6 @@ def compile_latex_snippet_to_svg(latex_snippet):
 
     extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed and os.path.exists(_TKZ_TAB_PATH)) else ""
 
-    # Kỹ thuật TeX thuần: Đo kích thước hộp \mybox chứa hình TikZ và ép khổ giấy PDF vừa khít hình đó (không cần standalone.cls!)
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
@@ -152,9 +152,9 @@ def compile_latex_snippet_to_svg(latex_snippet):
                             if line.startswith("!"):
                                 err_lines.append(line.strip())
                 err_msg = " | ".join(err_lines[:2]) if err_lines else "Không rõ nguyên nhân"
-                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi TikZ (V3): <code>{err_msg}</code></div>'
+                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi TikZ: <code>{err_msg}</code></div>'
         except Exception as e:
-            return f'<div style="color:red;font-size:13px;">Lỗi hệ thống TikZ (V3): {e}</div>'
+            return f'<div style="color:red;font-size:13px;">Lỗi hệ thống TikZ: {e}</div>'
 
 
 def unwrap_immini(text):
@@ -176,7 +176,7 @@ def unwrap_immini(text):
 
 
 def replace_macro_one_arg(text, macro_name, prefix, suffix):
-    r"""Thay thế các macro có 1 đối số (an toàn, không lặp vô tận)"""
+    r"""Thay thế các macro có 1 đối số"""
     pattern = re.compile(r'\\' + macro_name + r'(?![a-zA-Z])')
     search_pos = 0
     while True:
@@ -229,19 +229,16 @@ def normalize_math_internals(math_str):
 
 
 def clean_latex_to_markdown(text):
-    r"""Chuẩn hóa toàn bộ cú pháp LaTeX sang Markdown + MathJax (Khử sạch Tab/Indent 100%)"""
+    r"""Chuẩn hóa toàn bộ cú pháp LaTeX sang Markdown + MathJax"""
     if not text:
         return ""
 
-    # BƯỚC 0: Xóa ngay lập tức mọi dấu Tab (\t) và khoảng trắng đầu dòng từ trong trứng nước
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
-    # 1. Giải nén \immini và \multicols
     text = unwrap_immini(text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
-    # 2. Biên dịch cả khối TikZ và bảng Tabular sang ảnh SVG
     visual_pattern = re.compile(
         r'\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
         re.DOTALL
@@ -256,12 +253,10 @@ def clean_latex_to_markdown(text):
 
     text = visual_pattern.sub(_visual_repl, text)
 
-    # 3. Xóa các lệnh căn chỉnh bố cục không cần thiết
     text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
     text = re.sub(r'\\(noindent|par|centering|leavevmode|vfill|hfill|newpage|clearpage)\b', '', text)
     text = re.sub(r'\\(vspace|hspace)\*?\{.*?\}', ' ', text)
 
-    # 4. Chuẩn hóa \[...\] và \(...\) sang $$...$$ và $...$
     text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
 
@@ -274,7 +269,6 @@ def clean_latex_to_markdown(text):
             flags=re.DOTALL
         )
 
-    # 5. Xử lý danh sách \begin{itemchoice} trong lời giải Đúng/Sai
     if r'\begin{itemchoice}' in text:
         text = text.replace(r'\begin{itemchoice}', '').replace(r'\end{itemchoice}', '')
         parts = re.split(r'\\itemch\b', text)
@@ -290,7 +284,6 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\\end\{(enumerate|itemize)\}', '', text)
     text = re.sub(r'\\item\b(\s*\[.*?\])?', '\n- ', text)
 
-    # 6. Chuyển đổi các lệnh định dạng chữ tiếng Việt
     for _ in range(2):
         text = replace_macro_one_arg(text, 'textbf', '**', '**')
         text = replace_macro_one_arg(text, 'indam', '**', '**')
@@ -300,7 +293,6 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
         text = replace_macro_one_arg(text, 'fbox', '`', '`')
 
-    # 7. Bảo vệ và chuẩn hóa bên trong toàn bộ khối toán học $$...$$ và $...$
     math_blocks = {}
 
     def _save_display_math(m):
@@ -324,16 +316,13 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'heva', r'$$\left\{\begin{aligned}', r'\end{aligned}\right.$$')
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
-    # 8. Làm sạch văn bản thường: Dùng \n\n thay cho '  \n' để không tạo khoảng trắng thừa gây lỗi Code Block
     text = text.replace('{,}', ',').replace('~', ' ')
     text = text.replace('``', '"').replace("''", '"')
     text = re.sub(r'\\\\(\s*\[.*?\])?', '\n\n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
 
-    # Xóa lần cuối mọi khoảng trắng ở đầu và cuối mỗi dòng
     text = "\n".join(line.strip() for line in text.splitlines())
 
-    # 9. Khôi phục toàn bộ công thức toán và hình vẽ
     for k, val in math_blocks.items():
         text = text.replace(k, val)
 
@@ -344,8 +333,17 @@ def clean_latex_to_markdown(text):
     return text.strip()
 
 
-def parse_single_ex(ex_body, index):
-    r"""Phân tích 1 khối ex"""
+def parse_single_ex(ex_body_with_comments, index):
+    r"""Phân tích 1 khối ex kèm theo mã định danh KNTT %[12-C4-B11-V]"""
+    # 1. Đọc dòng đầu tiên của khối ex để trích xuất mã %[12-C4-B11-N] trước khi xóa comment
+    first_line = ex_body_with_comments.split('\n', 1)[0]
+    meta = decode_kntt_tag(first_line)
+    if not meta:
+        meta = decode_kntt_tag(ex_body_with_comments[:250])
+
+    # 2. Xóa các comment % thông thường
+    ex_body = re.sub(r'(?<!\\)%.*', '', ex_body_with_comments)
+
     loigiai_raw = ""
     lg_match = re.search(r'\\loigiai\s*\{', ex_body)
     if lg_match:
@@ -354,6 +352,9 @@ def parse_single_ex(ex_body, index):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
+    parsed_q = None
+
+    # Phần II: \choiceTF
     tf_match = re.search(r'\\choiceTF(?![a-zA-Z])', ex_body)
     if tf_match:
         stem_raw = ex_body[:tf_match.start()]
@@ -367,7 +368,7 @@ def parse_single_ex(ex_body, index):
                 "text": clean_latex_to_markdown(clean_opt),
                 "is_true": is_true
             })
-        return {
+        parsed_q = {
             "id": f"q_{index}",
             "part": 2,
             "stem": clean_latex_to_markdown(stem_raw),
@@ -375,48 +376,67 @@ def parse_single_ex(ex_body, index):
             "solution": clean_latex_to_markdown(loigiai_raw)
         }
 
-    mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
-    if mc_match:
-        stem_raw = ex_body[:mc_match.start()]
-        opts_raw, _ = extract_braced_args(ex_body, mc_match.end(), 4)
-        options = []
-        for idx, opt in enumerate(opts_raw):
-            is_true = bool(re.search(r'\\True\b', opt))
-            clean_opt = re.sub(r'\\True\b', '', opt).strip()
-            options.append({
-                "id": idx,
-                "text": clean_latex_to_markdown(clean_opt),
-                "is_true": is_true
+    # Phần I: \choice
+    if not parsed_q:
+        mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
+        if mc_match:
+            stem_raw = ex_body[:mc_match.start()]
+            opts_raw, _ = extract_braced_args(ex_body, mc_match.end(), 4)
+            options = []
+            for idx, opt in enumerate(opts_raw):
+                is_true = bool(re.search(r'\\True\b', opt))
+                clean_opt = re.sub(r'\\True\b', '', opt).strip()
+                options.append({
+                    "id": idx,
+                    "text": clean_latex_to_markdown(clean_opt),
+                    "is_true": is_true
+                })
+            parsed_q = {
+                "id": f"q_{index}",
+                "part": 1,
+                "stem": clean_latex_to_markdown(stem_raw),
+                "options": options,
+                "solution": clean_latex_to_markdown(loigiai_raw)
+            }
+
+    # Phần III: \shortans
+    if not parsed_q:
+        sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
+        if sa_match:
+            brace_pos = ex_body.find('{', sa_match.start())
+            sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
+            ans_raw = sa_args[0] if sa_args else ""
+            ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
+            stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
+            parsed_q = {
+                "id": f"q_{index}",
+                "part": 3,
+                "stem": clean_latex_to_markdown(stem_raw),
+                "short_ans": ans_clean,
+                "solution": clean_latex_to_markdown(loigiai_raw)
+            }
+
+    if parsed_q:
+        parsed_q["raw_tex"] = "\\begin{ex}" + ex_body_with_comments + "\\end{ex}"
+        parsed_q["question_hash"] = hashlib.md5(parsed_q["stem"].encode("utf-8")).hexdigest()
+        if meta:
+            parsed_q.update(meta)
+        else:
+            parsed_q.update({
+                "tag_id": "Chưa gắn mã",
+                "grade": "12",
+                "chapter_code": "C1",
+                "chapter_name": "Chương I. Ứng dụng đạo hàm để khảo sát và vẽ đồ thị hàm số",
+                "lesson_code": "B1",
+                "lesson_name": "Bài 1. Tính đơn điệu và cực trị của hàm số",
+                "level_code": "N",
+                "level_name": "Nhận biết"
             })
-        return {
-            "id": f"q_{index}",
-            "part": 1,
-            "stem": clean_latex_to_markdown(stem_raw),
-            "options": options,
-            "solution": clean_latex_to_markdown(loigiai_raw)
-        }
-
-    sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
-    if sa_match:
-        brace_pos = ex_body.find('{', sa_match.start())
-        sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
-        ans_raw = sa_args[0] if sa_args else ""
-        ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
-        stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
-        return {
-            "id": f"q_{index}",
-            "part": 3,
-            "stem": clean_latex_to_markdown(stem_raw),
-            "short_ans": ans_clean,
-            "solution": clean_latex_to_markdown(loigiai_raw)
-        }
-
-    return None
+    return parsed_q
 
 
 def parse_exam_tex(tex_content):
-    r"""Đọc toàn bộ file .tex và trả về danh sách câu hỏi"""
-    tex_content = re.sub(r'(?<!\\)%.*', '', tex_content)
+    r"""Đọc toàn bộ file .tex và trả về danh sách câu hỏi kèm Metadata KNTT"""
     ex_blocks = re.findall(r'\\begin\{ex\}(.*?)\\end\{ex\}', tex_content, flags=re.DOTALL)
     questions = []
     for idx, block in enumerate(ex_blocks):
