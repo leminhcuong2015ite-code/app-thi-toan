@@ -1,15 +1,14 @@
 import re
 import os
 import base64
-import hashlib
 import subprocess
 import tempfile
 import shutil
 import urllib.request
 
-_TIKZ_CACHE = {}
+PARSER_VERSION = "V3.0 - Direct PDF Crop & Zero Codeblock"
 
-# Chỉ tải gói tkz-tab.sty nhẹ để vẽ bảng biến thiên
+# Tải sẵn tkz-tab.sty nhẹ cho bảng biến thiên
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
     try:
@@ -68,32 +67,24 @@ def extract_braced_args(text, start_pos, num_args):
 
 
 def compile_latex_snippet_to_svg(latex_snippet):
-    r"""Biên dịch khối TikZ hoặc bảng Tabular sang ảnh SVG (Chỉ dùng các gói chuẩn có sẵn 100%)"""
-    code_hash = hashlib.md5(latex_snippet.encode("utf-8")).hexdigest()
-    if code_hash in _TIKZ_CACHE:
-        return _TIKZ_CACHE[code_hash]
-
-    if not shutil.which("latex") and not shutil.which("pdflatex"):
-        return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu bộ biên dịch LaTeX.</div>'
+    r"""Biên dịch TikZ bằng pdflatex + tự động co khổ giấy PDF vừa khít hình vẽ + pdf2svg"""
+    if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
+        return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
     snippet_fixed = latex_snippet
     snippet_fixed = re.sub(r'\\(vec|vv)\b', r'\\overrightarrow', snippet_fixed)
     snippet_fixed = snippet_fixed.replace(r'\ch@p', 'black')
 
-    extra_pkgs = []
-    if "tkzTab" in snippet_fixed and os.path.exists(_TKZ_TAB_PATH):
-        extra_pkgs.append(r"\usepackage{tkz-tab}")
-    if "axis" in snippet_fixed or "addplot" in snippet_fixed:
-        extra_pkgs.append(r"\usepackage{pgfplots}\pgfplotsset{compat=newest}")
+    extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed and os.path.exists(_TKZ_TAB_PATH)) else ""
 
-    # Chỉ khai báo các gói cốt lõi có sẵn trong texlive-latex-base & texlive-pictures (ĐÃ BỎ multirow, mathrsfs gây lỗi)
+    # Kỹ thuật TeX thuần: Đo kích thước hộp \mybox chứa hình TikZ và ép khổ giấy PDF vừa khít hình đó (không cần standalone.cls!)
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
-        r"\usepackage{amsmath,amssymb,amsfonts,xcolor,graphicx,array}" + "\n"
+        r"\usepackage{amsmath,amssymb,amsfonts,xcolor,graphicx}" + "\n"
         r"\usepackage{tikz}" + "\n"
-        + "\n".join(extra_pkgs) + "\n"
-        r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit,shapes.symbols}" + "\n"
+        + extra_pkg + "\n"
+        r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit}" + "\n"
         r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
         r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
@@ -105,9 +96,22 @@ def compile_latex_snippet_to_svg(latex_snippet):
         r"\providecommand{\Q}{\mathbb{Q}}" + "\n"
         r"\providecommand{\C}{\mathbb{C}}" + "\n"
         r"\pagestyle{empty}" + "\n"
+        r"\newsavebox{\mybox}" + "\n"
         r"\begin{document}" + "\n"
-        r"\noindent" + "\n"
+        r"\begin{lrbox}{\mybox}" + "\n"
         + snippet_fixed + "\n"
+        r"\end{lrbox}" + "\n"
+        r"\pdfpagewidth=\dimexpr\wd\mybox+12pt\relax" + "\n"
+        r"\pdfpageheight=\dimexpr\ht\mybox+\dp\mybox+12pt\relax" + "\n"
+        r"\hoffset=-1in" + "\n"
+        r"\voffset=-1in" + "\n"
+        r"\setlength{\topmargin}{0pt}" + "\n"
+        r"\setlength{\headheight}{0pt}" + "\n"
+        r"\setlength{\headsep}{0pt}" + "\n"
+        r"\setlength{\oddsidemargin}{0pt}" + "\n"
+        r"\setlength{\evensidemargin}{0pt}" + "\n"
+        r"\setlength{\parindent}{0pt}" + "\n"
+        r"\vbox to \pdfpageheight{\vfill\hbox to \pdfpagewidth{\hfill\usebox{\mybox}\hfill}\vfill}" + "\n"
         r"\end{document}"
     )
 
@@ -116,7 +120,6 @@ def compile_latex_snippet_to_svg(latex_snippet):
             shutil.copy(_TKZ_TAB_PATH, os.path.join(tmpdir, "tkz-tab.sty"))
 
         tex_file = os.path.join(tmpdir, "fig.tex")
-        dvi_file = os.path.join(tmpdir, "fig.dvi")
         pdf_file = os.path.join(tmpdir, "fig.pdf")
         svg_file = os.path.join(tmpdir, "fig.svg")
         log_file = os.path.join(tmpdir, "fig.log")
@@ -124,47 +127,23 @@ def compile_latex_snippet_to_svg(latex_snippet):
         with open(tex_file, "w", encoding="utf-8") as f:
             f.write(tex_doc)
         try:
-            # Ưu tiên 1: Dùng latex + dvisvgm --bbox=min để tự cắt sát mép hình vẽ
-            if shutil.which("latex") and shutil.which("dvisvgm"):
-                subprocess.run(
-                    ["latex", "-interaction=nonstopmode", "fig.tex"],
-                    cwd=tmpdir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=20
-                )
-                if os.path.exists(dvi_file):
-                    subprocess.run(
-                        ["dvisvgm", "--no-fonts", "--bbox=min", "--scale=1.25", dvi_file, "-o", svg_file],
-                        cwd=tmpdir,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=15
-                    )
-
-            # Ưu tiên 2: Nếu dvisvgm không chạy, dùng pdflatex + pdf2svg
-            if not os.path.exists(svg_file) and shutil.which("pdflatex") and shutil.which("pdf2svg"):
-                subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
-                    cwd=tmpdir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=20
-                )
-                if os.path.exists(pdf_file):
-                    subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
-
-            if os.path.exists(svg_file):
+            subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
+                cwd=tmpdir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=20
+            )
+            if os.path.exists(pdf_file):
+                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
-                res_html = (
+                return (
                     f'<div style="text-align:center; margin: 12px 0; overflow-x:auto;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
-                    f'style="max-width:100%; height:auto; background:white; padding:10px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
+                    f'style="max-width:100%; height:auto; background:white; padding:8px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
                     f'</div>'
                 )
-                _TIKZ_CACHE[code_hash] = res_html
-                return res_html
             else:
                 err_lines = []
                 if os.path.exists(log_file):
@@ -173,9 +152,9 @@ def compile_latex_snippet_to_svg(latex_snippet):
                             if line.startswith("!"):
                                 err_lines.append(line.strip())
                 err_msg = " | ".join(err_lines[:2]) if err_lines else "Không rõ nguyên nhân"
-                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi biên dịch hình/bảng: <code>{err_msg}</code></div>'
+                return f'<div style="color:#b91c1c;background:#fef2f2;padding:8px;border-radius:6px;font-size:13px;">⚠️ Lỗi TikZ (V3): <code>{err_msg}</code></div>'
         except Exception as e:
-            return f'<div style="color:red;font-size:13px;">Lỗi hệ thống khi vẽ TikZ: {e}</div>'
+            return f'<div style="color:red;font-size:13px;">Lỗi hệ thống TikZ (V3): {e}</div>'
 
 
 def unwrap_immini(text):
@@ -219,7 +198,7 @@ def replace_macro_one_arg(text, macro_name, prefix, suffix):
 
 
 def normalize_math_internals(math_str):
-    r"""Chuẩn hóa mọi ký hiệu từ gói yhmath, esvect, mathrsfs, nexuss sang chuẩn MathJax"""
+    r"""Chuẩn hóa mọi ký hiệu toán bên trong $...$ hoặc $$...$$ sang chuẩn MathJax"""
     math_str = re.sub(r'\\(allowdisplaybreaks|displaystyle|limits|nolimits|boldmath)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
@@ -249,17 +228,14 @@ def normalize_math_internals(math_str):
     return math_str
 
 
-def strip_markdown_indents(text):
-    r"""QUAN TRỌNG: Xóa toàn bộ dấu Tab (\t) và khoảng trắng đầu dòng để Markdown không biến câu văn thành Code Block"""
-    text = text.replace('\t', ' ')
-    lines = [line.lstrip(' ') for line in text.split('\n')]
-    return '\n'.join(lines)
-
-
 def clean_latex_to_markdown(text):
-    r"""Chuẩn hóa toàn bộ cú pháp LaTeX sang Markdown + MathJax hoàn chỉnh"""
+    r"""Chuẩn hóa toàn bộ cú pháp LaTeX sang Markdown + MathJax (Khử sạch Tab/Indent 100%)"""
     if not text:
         return ""
+
+    # BƯỚC 0: Xóa ngay lập tức mọi dấu Tab (\t) và khoảng trắng đầu dòng từ trong trứng nước
+    text = text.replace('\t', ' ').replace('\xa0', ' ')
+    text = "\n".join(line.strip() for line in text.splitlines())
 
     # 1. Giải nén \immini và \multicols
     text = unwrap_immini(text)
@@ -274,7 +250,7 @@ def clean_latex_to_markdown(text):
 
     def _visual_repl(match):
         code = match.group(0)
-        key = f"@@VISUAL_{hashlib.md5(code.encode()).hexdigest()}@@"
+        key = f"@@VISUAL_{len(visual_placeholders)}@@"
         visual_placeholders[key] = compile_latex_snippet_to_svg(code)
         return key
 
@@ -306,7 +282,6 @@ def clean_latex_to_markdown(text):
         new_text = parts[0].strip()
         for idx, p in enumerate(parts[1:]):
             lbl = labels[idx] if idx < 4 else f"{idx+1})"
-            # Gộp các dòng của cùng 1 ý lại để không bị ngắt khỏi dấu bullet
             p_clean = " ".join(line.strip() for line in p.strip().splitlines() if line.strip())
             new_text += f"\n\n- **{lbl}** {p_clean}"
         text = new_text
@@ -331,16 +306,14 @@ def clean_latex_to_markdown(text):
     def _save_display_math(m):
         k = f"@@DMATH_{len(math_blocks)}@@"
         inner = normalize_math_internals(m.group(1))
-        # Gộp khối toán học trên dòng không bị thụt lề Tab
-        inner_clean = "\n".join(line.strip() for line in inner.strip().splitlines())
-        math_blocks[k] = f"\n$$\n{inner_clean}\n$$\n"
+        inner_clean = "\n".join(line.strip() for line in inner.strip().splitlines() if line.strip())
+        math_blocks[k] = f"\n\n$$\n{inner_clean}\n$$\n\n"
         return k
 
     def _save_inline_math(m):
         k = f"@@IMATH_{len(math_blocks)}@@"
         inner = normalize_math_internals(m.group(1))
-        # Inline math tuyệt đối không được xuống dòng ở giữa
-        inner_single_line = " ".join(line.strip() for line in inner.strip().splitlines())
+        inner_single_line = " ".join(line.strip() for line in inner.strip().splitlines() if line.strip())
         math_blocks[k] = f"${inner_single_line}$"
         return k
 
@@ -351,14 +324,14 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'heva', r'$$\left\{\begin{aligned}', r'\end{aligned}\right.$$')
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
-    # 8. Làm sạch phần văn bản thường bên ngoài công thức toán
+    # 8. Làm sạch văn bản thường: Dùng \n\n thay cho '  \n' để không tạo khoảng trắng thừa gây lỗi Code Block
     text = text.replace('{,}', ',').replace('~', ' ')
     text = text.replace('``', '"').replace("''", '"')
-    text = re.sub(r'\\\\(\s*\[.*?\])?', '  \n', text)
+    text = re.sub(r'\\\\(\s*\[.*?\])?', '\n\n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
 
-    # XÓA SẠCH DẤU TAB VÀ KHOẢNG TRẮNG ĐẦU DÒNG (Nguyên nhân số 1 làm hỏng hiển thị $...$)
-    text = strip_markdown_indents(text)
+    # Xóa lần cuối mọi khoảng trắng ở đầu và cuối mỗi dòng
+    text = "\n".join(line.strip() for line in text.splitlines())
 
     # 9. Khôi phục toàn bộ công thức toán và hình vẽ
     for k, val in math_blocks.items():
