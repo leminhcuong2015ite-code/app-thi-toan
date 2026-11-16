@@ -730,7 +730,7 @@ if st.session_state.role == "teacher":
                         key="bank_part_flt"
                     )
 
-                     inspect_list = []
+                    inspect_list = []
                     for item in q_query:
                         h_str = check_question_health(item["question_data"])
                         if b_status_filter.startswith("⚠️") and "✅" in h_str:
