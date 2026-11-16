@@ -57,14 +57,13 @@ def compile_tikz_to_svg(tikz_code):
     if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
-    # Kiểm tra xem hình có dùng bảng biến thiên tkz-tab không
     extra_pkg = r"\usepackage{tkz-tab}" if "tkzTab" in tikz_code else ""
 
     tex_doc = r"""\documentclass[tikz,border=4pt]{standalone}
 \usepackage[utf8]{vietnam}
 \usepackage{amsmath,amssymb}
 """ + extra_pkg + r"""
-\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings, decorations.pathreplacing,babel}
+\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings,decorations.pathreplacing,babel}
 \begin{document}
 """ + tikz_code + r"""
 \end{document}"""
@@ -84,7 +83,6 @@ def compile_tikz_to_svg(tikz_code):
                 subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
-                # Dùng thẻ <img> với nền trắng bo góc giúp hình sắc nét và không bao giờ lỗi font
                 return (
                     f'<div style="text-align:center; margin: 14px 0;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
@@ -105,7 +103,7 @@ def unwrap_immini(text):
         args, end_pos = extract_braced_args(text, m.end(), 2)
         if len(args) < 2:
             break
-         combined = f"{args[0]}\n\n{args[1]}"
+        combined = f"{args[0]}\n\n{args[1]}"
         text = text[:m.start()] + combined + text[end_pos:]
     return text
 
@@ -148,11 +146,11 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\\noindent|\\par\b|\\allowdisplaybreaks', '', text)
 
     # 4. Chuẩn hóa các ký hiệu toán học hay bị lỗi trên MathJax
-    text = text.replace('{,}', ',')                 # Dấu phẩy số thập phân 4{,}5 -> 4,5
-    text = text.replace(r'\mathrm{~d}', r'\,\mathrm{d}')  # Tránh dấu ~ bị hiểu nhầm là gạch ngang chữ
-    text = text.replace('~', ' ')                   # Khoảng trắng không ngắt dòng
-    text = re.sub(r'\\wideparen\s*\{', r'\\widehat{', text) # Cung tròn \wideparen -> \widehat
-    text = re.sub(r'\\vec\b', r'\\overrightarrow', text)    # Đồng bộ ký hiệu vectơ
+    text = text.replace('{,}', ',')
+    text = text.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
+    text = text.replace('~', ' ')
+    text = re.sub(r'\\wideparen\s*\{', r'\\widehat{', text)
+    text = re.sub(r'\\vec\b', r'\\overrightarrow', text)
 
     # 5. Chuyển đổi hệ phương trình \heva và \hoac
     text = replace_macro_one_arg(text, 'heva', r'\left\{\begin{aligned}', r'\end{aligned}\right.')
@@ -186,14 +184,11 @@ def clean_latex_to_markdown(text):
         math_blocks[k] = m.group(0)
         return k
 
-    # Bảo vệ $$...$$ trước, sau đó bảo vệ $...$
     text = re.sub(r'\$\$.*?\$\$', _save_math, text, flags=re.DOTALL)
     text = re.sub(r'\$(?!\$).*?\$', _save_math, text, flags=re.DOTALL)
 
-    # Thay \\ ở phần văn bản thường thành xuống dòng Markdown (không làm hỏng \\ bên trong hệ phương trình)
     text = re.sub(r'\\\\(\s*\[.*?\])?', '  \n', text)
 
-    # Khôi phục các khối toán học
     for k, val in math_blocks.items():
         text = text.replace(k, val)
 
