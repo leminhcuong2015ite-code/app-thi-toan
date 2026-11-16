@@ -9,16 +9,17 @@ import urllib.request
 
 _TIKZ_CACHE = {}
 
-# Tự động tải sẵn file tkz-tab.sty nhẹ (35KB) về máy chủ nếu đề thi có Bảng biến thiên
-_TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
-if not os.path.exists(_TKZ_TAB_PATH):
-    try:
-        urllib.request.urlretrieve(
-            "https://mirrors.ctan.org/macros/latex/contrib/tkz/tkz-tab/latex/tkz-tab.sty",
-            _TKZ_TAB_PATH
-        )
-    except Exception:
-        pass
+# Tự động tải các file .sty lẻ cần thiết (nhẹ vài chục KB) mà không cần cài texlive-latex-extra 1.5GB
+_EXTRA_FILES = {
+    "tkz-tab.sty": "https://mirrors.ctan.org/macros/latex/contrib/tkz/tkz-tab/latex/tkz-tab.sty",
+}
+for fname, url in _EXTRA_FILES.items():
+    fpath = f"/tmp/{fname}"
+    if not os.path.exists(fpath):
+        try:
+            urllib.request.urlretrieve(url, fpath)
+        except Exception:
+            pass
 
 
 def extract_braced_args(text, start_pos, num_args):
@@ -68,39 +69,42 @@ def extract_braced_args(text, start_pos, num_args):
 
 
 def compile_tikz_to_svg(tikz_code):
-    r"""Biên dịch TikZ sang ảnh SVG (Khôi phục cơ chế nonstopmode mượt mà như bản đầu)"""
+    r"""Biên dịch TikZ sang SVG dùng lớp article chuẩn + dvisvgm cắt sát viền (không cần standalone.cls)"""
     code_hash = hashlib.md5(tikz_code.encode("utf-8")).hexdigest()
     if code_hash in _TIKZ_CACHE:
         return _TIKZ_CACHE[code_hash]
 
-    if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
-        return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
+    if not shutil.which("latex"):
+        return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu bộ biên dịch LaTeX.</div>'
 
-    # Chuẩn hóa một số lệnh thường dùng trong hình TikZ của giáo viên Toán VN
     tikz_code_fixed = tikz_code.replace(r'\vec', r'\overrightarrow')
 
-    use_tkz_tab = ("tkzTab" in tikz_code_fixed) and os.path.exists(_TKZ_TAB_PATH)
+    use_tkz_tab = ("tkzTab" in tikz_code_fixed) and os.path.exists("/tmp/tkz-tab.sty")
     extra_pkg = r"\usepackage{tkz-tab}" if use_tkz_tab else ""
 
-    # Bỏ thư viện 'babel' trong tikzlibrary vì babel rất hay gây lỗi ký tự $ và active char trong TikZ
+    # Dùng \documentclass{article} mặc định luôn có sẵn trong texlive-latex-base
     tex_doc = (
-        r"\documentclass[tikz,border=4pt]{standalone}" + "\n"
+        r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
         r"\usepackage{amsmath,amssymb,amsfonts}" + "\n"
+        r"\usepackage{tikz}" + "\n"
         + extra_pkg + "\n"
         r"\usetikzlibrary{arrows,arrows.meta,calc,intersections,shapes.geometric,patterns,positioning,angles,quotes,decorations.markings,decorations.pathreplacing}" + "\n"
         r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
+        r"\pagestyle{empty}" + "\n"
         r"\begin{document}" + "\n"
+        r"\noindent" + "\n"
         + tikz_code_fixed + "\n"
         r"\end{document}"
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         if use_tkz_tab:
-            shutil.copy(_TKZ_TAB_PATH, os.path.join(tmpdir, "tkz-tab.sty"))
+            shutil.copy("/tmp/tkz-tab.sty", os.path.join(tmpdir, "tkz-tab.sty"))
 
         tex_file = os.path.join(tmpdir, "fig.tex")
+        dvi_file = os.path.join(tmpdir, "fig.dvi")
         pdf_file = os.path.join(tmpdir, "fig.pdf")
         svg_file = os.path.join(tmpdir, "fig.svg")
         log_file = os.path.join(tmpdir, "fig.log")
@@ -108,28 +112,48 @@ def compile_tikz_to_svg(tikz_code):
         with open(tex_file, "w", encoding="utf-8") as f:
             f.write(tex_doc)
         try:
-            # QUAN TRỌNG: Không dùng -halt-on-error để pdflatex tự vượt qua các warning nhỏ như bản đầu tiên
-            subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
-                cwd=tmpdir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=20
-            )
-            if os.path.exists(pdf_file):
-                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
+            # Ưu tiên 1: Dùng latex -> dvisvgm (cắt sát khung hình chuẩn xác bằng --bbox=min, nhúng thẳng font)
+            if shutil.which("dvisvgm"):
+                subprocess.run(
+                    ["latex", "-interaction=nonstopmode", "fig.tex"],
+                    cwd=tmpdir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20
+                )
+                if os.path.exists(dvi_file):
+                    subprocess.run(
+                        ["dvisvgm", "--no-fonts", "--bbox=min", "--scale=1.25", dvi_file, "-o", svg_file],
+                        cwd=tmpdir,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=15
+                    )
+
+            # Ưu tiên 2 (Dự phòng): Nếu dvisvgm chưa tạo được file, dùng pdflatex + pdf2svg
+            if not os.path.exists(svg_file) and shutil.which("pdflatex") and shutil.which("pdf2svg"):
+                subprocess.run(
+                    ["pdflatex", "-interaction=nonstopmode", "fig.tex"],
+                    cwd=tmpdir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20
+                )
+                if os.path.exists(pdf_file):
+                    subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
+
+            if os.path.exists(svg_file):
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
                 res_html = (
                     f'<div style="text-align:center; margin: 12px 0;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
-                    f'style="max-width:100%; height:auto; background:white; padding:8px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
+                    f'style="max-width:100%; height:auto; background:white; padding:10px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
                     f'</div>'
                 )
                 _TIKZ_CACHE[code_hash] = res_html
                 return res_html
             else:
-                # Nếu vẫn không tạo được PDF, trích xuất dòng lỗi thực sự trong file .log để biết thiếu gì
                 err_lines = []
                 if os.path.exists(log_file):
                     with open(log_file, "r", encoding="utf-8", errors="ignore") as lf:
