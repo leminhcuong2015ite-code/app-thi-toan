@@ -65,7 +65,7 @@ except Exception:
 
 # ================= HÀM KIỂM TRA TRẠNG THÁI HIỂN THỊ CÂU HỎI =================
 def check_question_health(q):
-    """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh LaTeX không"""
+    """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh ex_test không"""
     issues = []
     full_rendered = q.get("stem", "") + " " + q.get("solution", "")
     if q.get("part") == 1:
@@ -77,8 +77,12 @@ def check_question_health(q):
         issues.append("❌ Lỗi hình TikZ")
     if not q.get("solution", "").strip():
         issues.append("⚠️ Trống lời giải")
-    if re.search(r'\\(begin|end|choice|loigiai|logiai|itemch)\b', full_rendered):
+    
+    # Chỉ bắt các lệnh cấu trúc đề của ex_test bị sót, bỏ qua \begin{aligned}, \begin{cases}... hợp lệ của MathJax
+    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini)\b', full_rendered):
         issues.append("⚠️ Sót lệnh LaTeX")
+    elif re.search(r'\\(begin|end)\{(?!(aligned|array|cases|matrix|pmatrix|bmatrix|vmatrix)\b)', full_rendered):
+        issues.append("⚠️ Sót môi trường LaTeX")
 
     if not issues:
         return "✅ Hiển thị tốt"
