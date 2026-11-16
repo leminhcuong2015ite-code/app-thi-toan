@@ -265,7 +265,7 @@ KNTT_DATA = {
             "B24": ("C8", "Bài 24. Hoán vị, chỉnh hợp và tổ hợp"),
             "B25": ("C8", "Bài 25. Nhị thức Newton"),
             "B26": ("C9", "Bài 26. Biến cố và định nghĩa cổ điển của xác suất"),
-            "B27": ("C9", "Bài 27. Thực hành tính xác suất theo định nghĩa cổ điển")
+            "B27": ("C9", "Bài 27. Thực hành tính xác suất")
         }
     },
     "11": {
@@ -351,11 +351,13 @@ KNTT_DATA = {
 
 
 def decode_kntt_tag(header_str, default_grade="12"):
-    """Giải mã thẻ %[12-C4-B11-V] hoặc %[12-B11-V] thành thông tin chi tiết"""
+    """Giải mã thẻ dạng %[10C1B1N] hoặc %[12-C4-B11-V] thành thông tin chi tiết"""
     if not header_str:
         return None
+    
+    # Biểu thức chính quy linh hoạt cho phép cả viết liền (10C1B1N) hoặc có dấu gạch ngang (12-C4-B11-V)
     m = re.search(
-        r'(\d{1,2})\s*-\s*(?:(C\d{1,2})\s*-\s*)?(B\d{1,2})\s*-\s*(VDC|VD|TH|NB|[NHVC])',
+        r'(\d{1,2})\s*-?\s*(?:(C\d{1,2})\s*-?\s*)?(B\d{1,2})\s*-?\s*(VDC|VD|TH|NB|[NHVC])',
         header_str,
         re.IGNORECASE
     )
