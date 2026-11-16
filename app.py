@@ -5,6 +5,7 @@ import pandas as pd
 import random
 import datetime
 import re
+import hashlib
 from latex_parser import parse_exam_tex
 from kntt_mapping import KNTT_DATA, LEVEL_MAP
 
@@ -457,7 +458,7 @@ if st.session_state.role == "teacher":
     # -----------------------------------------------------------------
     with t_bank:
         st.subheader("📥 Nạp câu hỏi từ file LaTeX vào Ngân hàng")
-        st.info("💡 Các câu hỏi có gắn mã `%[12-C4-B11-V]` từ Skill Gemini sẽ được tự động phân vào đúng Khối, Chương, Bài và Mức độ.")
+        st.info("💡 Các câu hỏi có gắn mã `%[12-C4-B11-V]` hoặc `%[10C1B1N]` sẽ được tự động phân vào đúng Khối, Chương, Bài và Mức độ.")
 
         c_def_g, c_def_c = st.columns([1, 2])
         fb_grade = c_def_g.selectbox("Khối mặc định (nếu câu hỏi thiếu mã ID)", ["12", "11", "10", "9", "8", "7", "6"], key="fb_g")
@@ -489,25 +490,46 @@ if st.session_state.role == "teacher":
             st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
             if st.button("📥 Lưu toàn bộ vào Ngân hàng câu hỏi", type="primary"):
-                db_records = []
+                unique_records_map = {}
                 for q in parsed_bank_qs:
-                    db_records.append({
+                    # Tạo hash từ cả đề dẫn + các phương án lựa chọn để phân biệt các câu có cùng câu dẫn nhưng khác đáp án
+                    full_content_str = (
+                        q["stem"]
+                        + str(q.get("options", ""))
+                        + str(q.get("statements", ""))
+                        + str(q.get("short_ans", ""))
+                    )
+                    q_hash = hashlib.md5(full_content_str.encode("utf-8")).hexdigest()
+                    q["question_hash"] = q_hash
+
+                    # Dùng dict theo khóa q_hash để khử trùng lặp ngay trong cùng 1 đợt tải lên
+                    unique_records_map[q_hash] = {
                         "tag_id": q["tag_id"],
-                        "grade": q["grade"],
+                        "grade": str(q["grade"]),
                         "chapter_code": q["chapter_code"],
                         "chapter_name": q["chapter_name"],
                         "lesson_code": q["lesson_code"],
                         "lesson_name": q["lesson_name"],
                         "level_code": q["level_code"],
                         "level_name": q["level_name"],
-                        "part": q["part"],
+                        "part": int(q["part"]),
                         "question_data": q,
                         "raw_tex": q.get("raw_tex", ""),
-                        "question_hash": q["question_hash"]
-                    })
-                supabase.table("question_bank").upsert(db_records, on_conflict="question_hash").execute()
-                st.success(f"🎉 Đã nạp {len(db_records)} câu hỏi vào Ngân hàng thành công!")
-                st.rerun()
+                        "question_hash": q_hash
+                    }
+
+                db_records = list(unique_records_map.values())
+                try:
+                    # Chia theo từng lô 50 câu để tránh quá tải gói tin PostgREST
+                    for i in range(0, len(db_records), 50):
+                        batch = db_records[i:i + 50]
+                        supabase.table("question_bank").upsert(batch, on_conflict="question_hash").execute()
+                    st.success(
+                        f"🎉 Đã nạp thành công {len(db_records)} câu hỏi duy nhất "
+                        f"(đã lọc bỏ {len(parsed_bank_qs) - len(db_records)} câu trùng lặp) vào Ngân hàng!"
+                    )
+                except Exception as e:
+                    st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
 
         st.divider()
         st.subheader("🎲 Rút câu hỏi & Trộn đề thi từ Ngân hàng (Theo Ma trận)")
@@ -534,7 +556,6 @@ if st.session_state.role == "teacher":
             st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này. Hãy nạp file .tex ở phía trên trước nhé!")
         else:
             st.write(f"📊 **Số lượng câu hỏi hiện có trong kho theo bộ lọc ({len(q_query)} câu):**")
-            # Thống kê số câu hiện có theo Phần x Mức độ
             matrix_counts = {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3]}
             for item in q_query:
                 p_val = item["part"]
@@ -568,7 +589,7 @@ if st.session_state.role == "teacher":
             st.dataframe(stat_df, use_container_width=True, hide_index=True)
 
             st.markdown("#### 🎯 Nhập số lượng câu muốn bốc ngẫu nhiên cho đề thi:")
-            picked_Config = {}
+            picked_config = {}
             part_names = {1: "Phần I (ABCD)", 2: "Phần II (Đúng/Sai)", 3: "Phần III (Trả lời ngắn)"}
             for p_idx in [1, 2, 3]:
                 st.markdown(f"**{part_names[p_idx]}:**")
@@ -577,10 +598,10 @@ if st.session_state.role == "teacher":
                 max_h = len(matrix_counts[p_idx]["H"])
                 max_v = len(matrix_counts[p_idx]["V"])
                 max_c = len(matrix_counts[p_idx]["C"])
-                picked_Config[(p_idx, "N")] = mc1.number_input(f"Nhận biết (Tối đa {max_n})", 0, max_n, 0, key=f"pk_{p_idx}_N")
-                picked_Config[(p_idx, "H")] = mc2.number_input(f"Thông hiểu (Tối đa {max_h})", 0, max_h, 0, key=f"pk_{p_idx}_H")
-                picked_Config[(p_idx, "V")] = mc3.number_input(f"Vận dụng (Tối đa {max_v})", 0, max_v, 0, key=f"pk_{p_idx}_V")
-                picked_Config[(p_idx, "C")] = mc4.number_input(f"Vận dụng cao (Tối đa {max_c})", 0, max_c, 0, key=f"pk_{p_idx}_C")
+                picked_config[(p_idx, "N")] = mc1.number_input(f"Nhận biết (Tối đa {max_n})", 0, max_n, 0, key=f"pk_{p_idx}_N")
+                picked_config[(p_idx, "H")] = mc2.number_input(f"Thông hiểu (Tối đa {max_h})", 0, max_h, 0, key=f"pk_{p_idx}_H")
+                picked_config[(p_idx, "V")] = mc3.number_input(f"Vận dụng (Tối đa {max_v})", 0, max_v, 0, key=f"pk_{p_idx}_V")
+                picked_config[(p_idx, "C")] = mc4.number_input(f"Vận dụng cao (Tối đa {max_c})", 0, max_c, 0, key=f"pk_{p_idx}_C")
 
             st.markdown("#### ⚙️ Thông tin Đề thi & Thang điểm:")
             mt1, mt2 = st.columns([3, 1])
@@ -596,7 +617,7 @@ if st.session_state.role == "teacher":
                 selected_qs = []
                 for p_idx in [1, 2, 3]:
                     for lvl in ["N", "H", "V", "C"]:
-                        need_cnt = picked_Config[(p_idx, lvl)]
+                        need_cnt = picked_config[(p_idx, lvl)]
                         if need_cnt > 0:
                             pool = matrix_counts[p_idx][lvl]
                             chosen_items = random.sample(pool, need_cnt)
