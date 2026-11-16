@@ -568,7 +568,7 @@ if st.session_state.role == "teacher":
             st.dataframe(stat_df, use_container_width=True, hide_index=True)
 
             st.markdown("#### 🎯 Nhập số lượng câu muốn bốc ngẫu nhiên cho đề thi:")
-             picked_Config = {}
+            picked_Config = {}
             part_names = {1: "Phần I (ABCD)", 2: "Phần II (Đúng/Sai)", 3: "Phần III (Trả lời ngắn)"}
             for p_idx in [1, 2, 3]:
                 st.markdown(f"**{part_names[p_idx]}:**")
