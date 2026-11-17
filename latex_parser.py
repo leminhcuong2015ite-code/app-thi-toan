@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.1 - Fix lq/rq Quotes & Support Tự Luận (bt/ex)"
+PARSER_VERSION = "V5.2 - Fix LaTeX Spaces, Quotes & Support Tự Luận (bt/ex)"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -210,6 +210,9 @@ def normalize_math_internals(math_str):
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
     math_str = math_str.replace('~', r'\,')
 
+    # Chuyển "\ " (backslash + khoảng trắng) trong công thức toán thành khoảng trắng chuẩn \, của MathJax
+    math_str = re.sub(r'\\(?=\s)', r'\\,', math_str)
+
     math_str = re.sub(r'\\vv\*?\s*\{', r'\\overrightarrow{', math_str)
     math_str = re.sub(r'\\vec\b', r'\\overrightarrow', math_str)
     math_str = re.sub(r'\\wideparen\s*\{', r'\\widehat{', math_str)
@@ -329,6 +332,8 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
     text = text.replace('{,}', ',').replace('~', ' ')
+    # Chuyển "\ ", "\,", "\;", "\!", "\quad", "\qquad" ngoài môi trường toán thành khoảng trắng thường
+    text = re.sub(r'\\(\s+|,|;|!|quad\b|qquad\b)', ' ', text)
     text = text.replace('``', '"').replace("''", '"')
     text = re.sub(r'\\\\(\s*\[.*?\])?', '\n\n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
