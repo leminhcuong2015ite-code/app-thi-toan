@@ -152,6 +152,9 @@ div[role="radiogroup"] > label:hover {
     margin-bottom: 8px;
     color: #334155;
 }
+.opt-box-true p, .opt-box-false p {
+    margin: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -206,7 +209,7 @@ def check_question_health(q):
     return " | ".join(issues)
 
 def render_question_card(q, index_label):
-    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) với phong cách trực quan hiện đại"""
+    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100%"""
     status_str = check_question_health(q)
     st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
     st_fg = "#166534" if "✅" in status_str else "#991b1b"
@@ -239,8 +242,9 @@ def render_question_card(q, index_label):
             icon = "✅" if is_t else "⚪"
             lbl = labels[idx] if idx < 4 else str(idx + 1)
             box_cls = "opt-box-true" if is_t else "opt-box-false"
+            # QUAN TRỌNG: Phải có \n\n sau thẻ mở <div> và trước thẻ đóng </div> để Streamlit kích hoạt MathJax
             cols[idx % 2].markdown(
-                f'<div class="{box_cls}">{icon} <b>{lbl}.</b> {opt.get("text", "")}</div>',
+                f'<div class="{box_cls}">\n\n{icon} **{lbl}.** {opt.get("text", "")}\n\n</div>',
                 unsafe_allow_html=True
             )
     elif part_num == 2:
@@ -257,7 +261,7 @@ def render_question_card(q, index_label):
     sol_text = q.get("solution", "").strip()
     if sol_text:
         st.markdown(
-            f'<div class="solution-box"><b>📖 Lời giải chi tiết:</b><br><br>\n\n{sol_text}\n\n</div>',
+            f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{sol_text}\n\n</div>',
             unsafe_allow_html=True
         )
     else:
