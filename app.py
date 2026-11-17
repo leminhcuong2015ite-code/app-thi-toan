@@ -226,13 +226,7 @@ def check_question_health(q):
     if not issues:
         return "✅ Hiển thị tốt"
     return " | ".join(issues)
-
-def render_question_card(q, index_label):
-    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100%"""
-    status_str = check_question_health(q)
-    st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
-    st_fg = "#166534" if "✅" in status_str else "#991b1b"
-    def clean_leftover_spaces(txt):
+def clean_leftover_spaces(txt):
     """Làm sạch các lệnh khoảng trắng LaTeX (\ , \, , \quad) bị sót ngoài công thức toán"""
     if not txt:
         return ""
@@ -240,6 +234,12 @@ def render_question_card(q, index_label):
     # Thay thế "\ " bằng khoảng trắng thường (nếu ngoài $) hoặc \, (nếu trong $)
     txt = re.sub(r'\\(\s+)', ' ', txt)
     return txt
+def render_question_card(q, index_label):
+    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100%"""
+    status_str = check_question_health(q)
+    st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
+    st_fg = "#166534" if "✅" in status_str else "#991b1b"
+    
     lvl_code = q.get("level_code", "N")
     lvl_bg, lvl_fg = LEVEL_COLORS.get(lvl_code, ("#f1f5f9", "#334155"))
     part_num = q.get("part", 1)
