@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V4.0 - KNTT Tagging & Direct PDF Crop"
+PARSER_VERSION = "V5.0 - Support Tự Luận (bt/ex) & KNTT Tagging"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -139,9 +139,9 @@ def compile_latex_snippet_to_svg(latex_snippet):
                 with open(svg_file, "rb") as f:
                     b64_svg = base64.b64encode(f.read()).decode("utf-8")
                 return (
-                    f'<div style="text-align:center; margin: 12px 0; overflow-x:auto;">'
+                    f'<div style="text-align:center; margin: 14px 0; overflow-x:auto;">'
                     f'<img src="data:image/svg+xml;base64,{b64_svg}" '
-                    f'style="max-width:100%; height:auto; background:white; padding:8px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);" />'
+                    f'style="max-width:100%; height:auto; background:white; padding:10px; border-radius:10px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.05);" />'
                     f'</div>'
                 )
             else:
@@ -333,19 +333,17 @@ def clean_latex_to_markdown(text):
     return text.strip()
 
 
-def parse_single_ex(ex_body_with_comments, index):
-    r"""Phân tích 1 khối ex kèm theo mã định danh KNTT %[12-C4-B11-V]"""
-    # 1. Đọc dòng đầu tiên của khối ex để trích xuất mã %[12-C4-B11-N] trước khi xóa comment
-    first_line = ex_body_with_comments.split('\n', 1)[0]
+def parse_single_block(block_body_with_comments, index, env_type="ex"):
+    r"""Phân tích 1 khối ex hoặc bt kèm theo mã định danh KNTT %[12-C4-B11-V]"""
+    first_line = block_body_with_comments.split('\n', 1)[0]
     meta = decode_kntt_tag(first_line)
     if not meta:
-        meta = decode_kntt_tag(ex_body_with_comments[:250])
+        meta = decode_kntt_tag(block_body_with_comments[:250])
 
-    # 2. Xóa các comment % thông thường
-    ex_body = re.sub(r'(?<!\\)%.*', '', ex_body_with_comments)
+    ex_body = re.sub(r'(?<!\\)%.*', '', block_body_with_comments)
 
     loigiai_raw = ""
-    lg_match = re.search(r'\\loigiai\s*\{', ex_body)
+    lg_match = re.search(r'\\loi?giai\s*\{', ex_body)
     if lg_match:
         lg_args, lg_end = extract_braced_args(ex_body, lg_match.end() - 1, 1)
         if lg_args:
@@ -354,8 +352,12 @@ def parse_single_ex(ex_body_with_comments, index):
 
     parsed_q = None
 
-    # Phần II: \choiceTF
+    # 1. Nếu là môi trường \begin{bt}...\end{bt} -> Mặc định là Câu hỏi Tự luận (part = 4)
+    # (Trừ khi bên trong bt vẫn có \choice, \choiceTF, \shortans thì vẫn ưu tiên bắt trắc nghiệm)
     tf_match = re.search(r'\\choiceTF(?![a-zA-Z])', ex_body)
+    mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
+    sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
+
     if tf_match:
         stem_raw = ex_body[:tf_match.start()]
         opts_raw, _ = extract_braced_args(ex_body, tf_match.end(), 4)
@@ -376,49 +378,60 @@ def parse_single_ex(ex_body_with_comments, index):
             "solution": clean_latex_to_markdown(loigiai_raw)
         }
 
-    # Phần I: \choice
-    if not parsed_q:
-        mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
-        if mc_match:
-            stem_raw = ex_body[:mc_match.start()]
-            opts_raw, _ = extract_braced_args(ex_body, mc_match.end(), 4)
-            options = []
-            for idx, opt in enumerate(opts_raw):
-                is_true = bool(re.search(r'\\True\b', opt))
-                clean_opt = re.sub(r'\\True\b', '', opt).strip()
-                options.append({
-                    "id": idx,
-                    "text": clean_latex_to_markdown(clean_opt),
-                    "is_true": is_true
-                })
-            parsed_q = {
-                "id": f"q_{index}",
-                "part": 1,
-                "stem": clean_latex_to_markdown(stem_raw),
-                "options": options,
-                "solution": clean_latex_to_markdown(loigiai_raw)
-            }
+    elif mc_match:
+        stem_raw = ex_body[:mc_match.start()]
+        opts_raw, _ = extract_braced_args(ex_body, mc_match.end(), 4)
+        options = []
+        for idx, opt in enumerate(opts_raw):
+            is_true = bool(re.search(r'\\True\b', opt))
+            clean_opt = re.sub(r'\\True\b', '', opt).strip()
+            options.append({
+                "id": idx,
+                "text": clean_latex_to_markdown(clean_opt),
+                "is_true": is_true
+            })
+        parsed_q = {
+            "id": f"q_{index}",
+            "part": 1,
+            "stem": clean_latex_to_markdown(stem_raw),
+            "options": options,
+            "solution": clean_latex_to_markdown(loigiai_raw)
+        }
 
-    # Phần III: \shortans
-    if not parsed_q:
-        sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
-        if sa_match:
-            brace_pos = ex_body.find('{', sa_match.start())
-            sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
-            ans_raw = sa_args[0] if sa_args else ""
-            ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
-            stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
+    elif sa_match:
+        brace_pos = ex_body.find('{', sa_match.start())
+        sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
+        ans_raw = sa_args[0] if sa_args else ""
+        ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
+        stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
+        parsed_q = {
+            "id": f"q_{index}",
+            "part": 3,
+            "stem": clean_latex_to_markdown(stem_raw),
+            "short_ans": ans_clean,
+            "solution": clean_latex_to_markdown(loigiai_raw)
+        }
+
+    else:
+        # Không có \choice, \choiceTF, \shortans -> Nhận diện là Tự luận (Phần IV - part = 4)
+        stem_clean = clean_latex_to_markdown(ex_body)
+        if stem_clean:
             parsed_q = {
                 "id": f"q_{index}",
-                "part": 3,
-                "stem": clean_latex_to_markdown(stem_raw),
-                "short_ans": ans_clean,
+                "part": 4,
+                "stem": stem_clean,
                 "solution": clean_latex_to_markdown(loigiai_raw)
             }
 
     if parsed_q:
-        parsed_q["raw_tex"] = "\\begin{ex}" + ex_body_with_comments + "\\end{ex}"
-        parsed_q["question_hash"] = hashlib.md5(parsed_q["stem"].encode("utf-8")).hexdigest()
+        parsed_q["raw_tex"] = f"\\begin{{{env_type}}}" + block_body_with_comments + f"\\end{{{env_type}}}"
+        full_str = (
+            parsed_q["stem"]
+            + str(parsed_q.get("options", ""))
+            + str(parsed_q.get("statements", ""))
+            + str(parsed_q.get("short_ans", ""))
+        )
+        parsed_q["question_hash"] = hashlib.md5(full_str.encode("utf-8")).hexdigest()
         if meta:
             parsed_q.update(meta)
         else:
@@ -436,11 +449,13 @@ def parse_single_ex(ex_body_with_comments, index):
 
 
 def parse_exam_tex(tex_content):
-    r"""Đọc toàn bộ file .tex và trả về danh sách câu hỏi kèm Metadata KNTT"""
-    ex_blocks = re.findall(r'\\begin\{ex\}(.*?)\\end\{ex\}', tex_content, flags=re.DOTALL)
+    r"""Đọc toàn bộ file .tex/.txt (cả môi trường ex và bt) theo đúng thứ tự xuất hiện"""
+    pattern = re.compile(r'\\begin\{(ex|bt)\}(.*?)\\end\{\1\}', flags=re.DOTALL)
     questions = []
-    for idx, block in enumerate(ex_blocks):
-        parsed = parse_single_ex(block, idx + 1)
+    for idx, match in enumerate(pattern.finditer(tex_content)):
+        env_type = match.group(1)
+        block_body = match.group(2)
+        parsed = parse_single_block(block_body, idx + 1, env_type=env_type)
         if parsed:
             questions.append(parsed)
     return questions
