@@ -6,6 +6,7 @@ import random
 import datetime
 import re
 import hashlib
+import io
 from latex_parser import parse_exam_tex, clean_latex_to_markdown
 from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
 
@@ -178,6 +179,31 @@ LEVEL_COLORS = {
     "C": ("#fce7f3", "#9d174d")
 }
 
+# ================= HÀM ĐỌC FILE CSV / EXCEL AN TOÀN (CHỐNG LỖI UNICODEDECODEERROR) =================
+def read_student_file_safe(uploaded_file):
+    """Đọc file danh sách học sinh (.csv hoặc .xlsx) tự động nhận diện bảng mã tiếng Việt và dấu phân cách"""
+    raw_bytes = uploaded_file.getvalue()
+    fname = uploaded_file.name.lower()
+
+    if fname.endswith(".xlsx") or fname.endswith(".xls") or raw_bytes[:2] == b"PK":
+        return pd.read_excel(io.BytesIO(raw_bytes))
+
+    encodings_to_try = ["utf-8-sig", "utf-8", "utf-16", "cp1258", "windows-1252", "latin1"]
+    for enc in encodings_to_try:
+        try:
+            text_content = raw_bytes.decode(enc)
+            first_line = text_content.splitlines()[0] if text_content.splitlines() else ""
+            sep = ";" if first_line.count(";") > first_line.count(",") else (", " if "\t" not in first_line else "\t")
+            if sep == ", ":
+                sep = ","
+            df = pd.read_csv(io.StringIO(text_content), sep=sep)
+            if len(df.columns) >= 4:
+                return df
+        except Exception:
+            continue
+
+    return pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8", errors="replace")
+
 # ================= HÀM KIỂM TRA TRẠNG THÁI HIỂN THỊ & DỰNG THẺ CÂU HỎI =================
 def check_question_health(q):
     """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh ex_test không"""
@@ -192,7 +218,7 @@ def check_question_health(q):
         issues.append("❌ Lỗi hình TikZ")
     if not q.get("solution", "").strip():
         issues.append("⚠️ Trống lời giải")
-    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini)\b', full_rendered):
+    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini|lq|rq)\b', full_rendered):
         issues.append("⚠️ Sót lệnh LaTeX")
     elif re.search(r'\\(begin|end)\{(?!(aligned|array|cases|matrix|pmatrix|bmatrix|vmatrix)\b)', full_rendered):
         issues.append("⚠️ Sót môi trường LaTeX")
@@ -225,7 +251,8 @@ def render_question_card(q, index_label):
         unsafe_allow_html=True
     )
 
-    st.markdown(q.get("stem", ""), unsafe_allow_html=True)
+    stem_disp = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', q.get("stem", ""))
+    st.markdown(stem_disp, unsafe_allow_html=True)
 
     if part_num == 1:
         labels = ["A", "B", "C", "D"]
@@ -235,8 +262,9 @@ def render_question_card(q, index_label):
             icon = "✅" if is_t else "⚪"
             lbl = labels[idx] if idx < 4 else str(idx + 1)
             box_cls = "opt-box-true" if is_t else "opt-box-false"
+            opt_txt = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', opt.get("text", ""))
             cols[idx % 2].markdown(
-                f'<div class="{box_cls}">\n\n{icon} **{lbl}.** {opt.get("text", "")}\n\n</div>',
+                f'<div class="{box_cls}">\n\n{icon} **{lbl}.** {opt_txt}\n\n</div>',
                 unsafe_allow_html=True
             )
     elif part_num == 2:
@@ -244,13 +272,14 @@ def render_question_card(q, index_label):
         for idx, st_i in enumerate(q.get("statements", [])):
             badge = "🟢 **[Đúng]**" if st_i.get("is_true") else "🔴 **[Sai]**"
             lbl = st_labels[idx] if idx < 4 else f"{idx+1})"
-            st.markdown(f"- **{lbl}** {st_i.get('text', '')} $\\longrightarrow$ {badge}", unsafe_allow_html=True)
+            st_txt = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', st_i.get("text", ""))
+            st.markdown(f"- **{lbl}** {st_txt} $\\longrightarrow$ {badge}", unsafe_allow_html=True)
     elif part_num == 3:
         st.markdown(f"🔑 **Đáp số trả lời ngắn:** `{q.get('short_ans', '')}`")
     elif part_num == 4:
         st.markdown("✍️ **Dạng câu hỏi:** *Bài tập Tự luận (Trình bày lời giải chi tiết)*")
 
-    sol_text = q.get("solution", "").strip()
+    sol_text = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', q.get("solution", "").strip())
     if sol_text:
         st.markdown(
             f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{sol_text}\n\n</div>',
@@ -731,7 +760,7 @@ with st.sidebar:
         st.rerun()
 
 # =====================================================================
-# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (TÁCH 5 TAB ĐỘC LẬP, DỄ QUẢN LÝ)
+# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (5 TAB ĐỘC LẬP)
 # =====================================================================
 if st.session_state.role == "teacher":
     st.title("👨‍🏫 Bảng Điều Khiển Giáo Viên")
@@ -743,9 +772,6 @@ if st.session_state.role == "teacher":
         "📊 5. Bảng điểm, Giám sát & Thống kê"
     ])
 
-    # -----------------------------------------------------------------
-    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
-    # -----------------------------------------------------------------
     # -----------------------------------------------------------------
     # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
     # -----------------------------------------------------------------
@@ -763,7 +789,6 @@ if st.session_state.role == "teacher":
             key="missing_id_policy"
         )
 
-        # Chỉ hiển thị bộ chọn Khối/Chương/Bài/Mức độ mặc định nếu người dùng chọn chế độ 3
         fb_grade, fb_chap_code, fb_lesson_code, fb_lvl_code = "10", "C1", "B1", "N"
         if missing_id_mode.startswith("📌"):
             c_def1, c_def2, c_def3, c_def4 = st.columns([1, 2, 2, 1])
@@ -887,10 +912,17 @@ if st.session_state.role == "teacher":
                     if not filtered_pre_qs:
                         st.info("🎉 Không có câu hỏi nào nằm trong bộ lọc này.")
                     else:
-                        page_size = 10
+                        pg_c1, pg_c2 = st.columns([1.5, 2.5])
+                        pre_page_opt = pg_c1.selectbox(
+                            "Số câu hiển thị mỗi trang:",
+                            [20, 50, 100, "Tất cả"],
+                            index=1,
+                            key="pre_page_size_sel"
+                        )
+                        page_size = len(filtered_pre_qs) if pre_page_opt == "Tất cả" else int(pre_page_opt)
                         total_pages = max(1, (len(filtered_pre_qs) + page_size - 1) // page_size)
-                        cur_page = st.number_input(
-                            f"Trang xem trước (1 - {total_pages}, mỗi trang {page_size} câu):",
+                        cur_page = pg_c2.number_input(
+                            f"Trang xem trước (1 - {total_pages}, tổng {len(filtered_pre_qs)} câu):",
                             min_value=1, max_value=total_pages, value=1, key="pre_page"
                         )
                         start_i = (cur_page - 1) * page_size
@@ -960,6 +992,8 @@ if st.session_state.role == "teacher":
                             st.success(msg)
                         except Exception as e:
                             st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
+
+        st.divider()
         st.subheader("🔍 2. Duyệt, Kiểm tra hiển thị & Sửa/Xóa câu hỏi trong Ngân hàng")
 
         b_col1, b_col2, b_col3 = st.columns([1, 2, 2])
@@ -974,7 +1008,7 @@ if st.session_state.role == "teacher":
             key="b_mgr_l"
         )
 
-        bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id", desc=True).execute().data
+        bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id").execute().data
         if b_sel_lessons:
             bank_items = [item for item in bank_items if item["lesson_code"] in b_sel_lessons]
 
@@ -988,7 +1022,7 @@ if st.session_state.role == "teacher":
                 f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
             )
 
-            bank_flt1, bank_flt2 = st.columns([2, 2])
+            bank_flt1, bank_flt2, bank_flt3 = st.columns([2, 2, 1.5])
             b_status_filter = bank_flt1.selectbox(
                 "Lọc theo trạng thái biên dịch:",
                 ["Tất cả câu hỏi", "⚠️ Chỉ xem câu có cảnh báo", "✅ Chỉ xem câu hiển thị tốt"],
@@ -998,6 +1032,12 @@ if st.session_state.role == "teacher":
                 "Lọc theo Phần:",
                 ["Tất cả các phần", "Phần 1 (ABCD)", "Phần 2 (Đúng/Sai)", "Phần 3 (Trả lời ngắn)", "Phần 4 (Tự luận)"],
                 key="bank_part_flt"
+            )
+            b_page_opt = bank_flt3.selectbox(
+                "Số câu / trang:",
+                [20, 50, 100, "Tất cả"],
+                index=1,
+                key="bank_page_size_sel"
             )
 
             inspect_list = []
@@ -1020,7 +1060,7 @@ if st.session_state.role == "teacher":
             if not inspect_list:
                 st.info("Không có câu hỏi nào khớp với bộ lọc.")
             else:
-                b_page_size = 10
+                b_page_size = len(inspect_list) if b_page_opt == "Tất cả" else int(b_page_opt)
                 b_total_pages = max(1, (len(inspect_list) + b_page_size - 1) // b_page_size)
                 b_cur_page = st.number_input(
                     f"Trang danh sách câu hỏi (1 - {b_total_pages}, tổng {len(inspect_list)} câu):",
@@ -1035,6 +1075,10 @@ if st.session_state.role == "teacher":
                     with c_act:
                         if st.button("🗑️ Xóa", key=f"del_qb_{item['id']}"):
                             supabase.table("question_bank").delete().eq("id", item["id"]).execute()
+                            try:
+                                supabase.rpc("sync_question_bank_seq").execute()
+                            except Exception:
+                                pass
                             st.toast(f"Đã xóa câu #{item['id']} khỏi Ngân hàng!")
                             st.rerun()
 
@@ -1064,16 +1108,16 @@ if st.session_state.role == "teacher":
                     st.divider()
 
         st.divider()
-        # KHU VỰC XÓA SẠCH NGÂN HÀNG CÂU HỎI CÓ XÁC THỰC 2 LỚP
-        with st.expander("🚨 3. Xóa sạch Ngân hàng câu hỏi để giải phóng bộ nhớ Supabase (Khu vực nguy hiểm)"):
+        # KHU VỰC XÓA SẠCH NGÂN HÀNG CÂU HỎI & ĐÁNH SỐ LẠI ID KHO TỪ 1
+        with st.expander("🚨 3. Xóa sạch Ngân hàng câu hỏi & Đánh số lại ID Kho từ #1"):
             st.warning(
-                "⚠️ **Cảnh báo quan trọng:** Hành động này sẽ xóa vĩnh viễn các câu hỏi trong bảng `question_bank` trên Supabase để giải phóng bộ nhớ. "
+                "⚠️ **Cảnh báo quan trọng:** Hành động này sẽ xóa các câu hỏi trong bảng `question_bank` trên Supabase để giải phóng bộ nhớ và đặt lại bộ đếm ID Kho về lại từ `#1`. "
                 "Các đề thi đã xuất bản ở Tab 3 sẽ không bị ảnh hưởng."
             )
             del_scope = st.radio(
                 "Chọn phạm vi Ngân hàng muốn xóa:",
                 [
-                    "🔥 Xóa TOÀN BỘ Ngân hàng câu hỏi (Tất cả các Khối 6 - 12)",
+                    "🔥 Xóa TOÀN BỘ Ngân hàng câu hỏi (Tất cả các Khối 6 - 12) & Reset ID Kho về #1",
                     f"🧹 Chỉ xóa câu hỏi thuộc Khối {b_sel_g} đang chọn ở trên"
                 ],
                 key="del_bank_scope"
@@ -1082,14 +1126,21 @@ if st.session_state.role == "teacher":
             confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` (viết hoa, không dấu) để mở khóa nút xóa:", key="txt_wipe_bank")
 
             can_wipe = confirm_chk and (confirm_txt.strip() == "XOA NGAN HANG")
-            if st.button("🗑️ TIẾN HÀNH XÓA NGÂN HÀNG CÂU HỎI", type="primary", disabled=not can_wipe):
+            if st.button("🗑️ TIẾN HÀNH XÓA & ĐÁNH SỐ LẠI ID KHO", type="primary", disabled=not can_wipe):
                 try:
                     if del_scope.startswith("🔥"):
-                        supabase.table("question_bank").delete().gt("id", 0).execute()
-                        st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và giải phóng bộ nhớ Supabase thành công!")
+                        try:
+                            supabase.rpc("reset_question_bank_id").execute()
+                        except Exception:
+                            supabase.table("question_bank").delete().gt("id", 0).execute()
+                        st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và đặt lại ID Kho bắt đầu từ #1!")
                     else:
                         supabase.table("question_bank").delete().eq("grade", b_sel_g).execute()
-                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {b_sel_g} thành công!")
+                        try:
+                            supabase.rpc("sync_question_bank_seq").execute()
+                        except Exception:
+                            pass
+                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {b_sel_g} và đồng bộ lại bộ đếm ID!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Lỗi khi xóa ngân hàng: {e}")
@@ -1146,7 +1197,6 @@ if st.session_state.role == "teacher":
                 if not q_query:
                     st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc các Bài học đang chọn. Hãy sang Tab 1 để nạp câu hỏi trước nhé!")
                 else:
-                    # Phân loại kho câu hỏi theo từng Bài học -> Phần (1..4) -> Mức độ (N, H, V, C)
                     lesson_pools = {
                         b_code: {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3, 4]}
                         for b_code in sel_lessons
@@ -1160,7 +1210,6 @@ if st.session_state.role == "teacher":
                         if b_c in lesson_pools and p_v in lesson_pools[b_c]:
                             lesson_pools[b_c][p_v][l_v].append(item)
 
-                    # BẢNG TỔNG QUAN SỐ LƯỢNG CÂU HIỆN CÓ TRONG KHO THEO TỪNG BÀI
                     summary_rows = []
                     for b_code in sel_lessons:
                         b_pool = lesson_pools[b_code]
@@ -1220,7 +1269,6 @@ if st.session_state.role == "teacher":
 
                     if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
                         selected_qs = []
-                        # Gom câu hỏi theo thứ tự Phần 1 -> Phần 2 -> Phần 3 -> Phần 4, bên trong lấy đúng số câu từng Bài học
                         for p_idx in [1, 2, 3, 4]:
                             for b_code in sel_lessons:
                                 for lvl in ["N", "H", "V", "C"]:
@@ -1243,7 +1291,6 @@ if st.session_state.role == "teacher":
                             )
                             st.rerun()
 
-                    # KHUNG XEM BẢN NHÁP ĐỀ THI ĐẦY ĐỦ + NÚT ĐỔI CÂU HỎI KHÁC
                     if st.session_state.get("draft_matrix_qs"):
                         draft_qs = st.session_state["draft_matrix_qs"]
                         st.markdown("---")
@@ -1416,7 +1463,7 @@ if st.session_state.role == "teacher":
                                     st.divider()
 
     # -----------------------------------------------------------------
-    # TAB 4: QUẢN LÝ HỌC SINH THEO LỚP
+    # TAB 4: QUẢN LÝ HỌC SINH THEO LỚP (ĐỌC MỌI BẢNG MÃ CSV / EXCEL AN TOÀN)
     # -----------------------------------------------------------------
     with t_stu:
         st.subheader("1. Nhập danh sách lớp từ Excel / CSV")
@@ -1427,24 +1474,57 @@ if st.session_state.role == "teacher":
             {"Họ tên": "Trần Thị Bình", "Lớp": "12A1", "Tài khoản": "12a1_02", "Mật khẩu": "123"},
             {"Họ tên": "Lê Hoàng Cường", "Lớp": "11A2", "Tài khoản": "11a2_01", "Mật khẩu": "123"}
         ])
-        st.download_button("📥 Tải file CSV mẫu", sample_df.to_csv(index=False).encode("utf-8-sig"), "danh_sach_lop_mau.csv", "text/csv")
+
+        dl_c1, dl_c2 = st.columns(2)
+        dl_c1.download_button(
+            "📥 Tải file CSV mẫu (UTF-8)",
+            sample_df.to_csv(index=False).encode("utf-8-sig"),
+            "danh_sach_lop_mau.csv",
+            "text/csv",
+            use_container_width=True
+        )
+        excel_buf = io.BytesIO()
+        with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+            sample_df.to_excel(writer, index=False)
+        dl_c2.download_button(
+            "📥 Tải file Excel (.xlsx) mẫu",
+            excel_buf.getvalue(),
+            "danh_sach_lop_mau.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
         stu_file = st.file_uploader("Chọn file Excel (.xlsx) hoặc CSV (.csv)", type=["xlsx", "csv"])
         if stu_file:
-            df = pd.read_csv(stu_file) if stu_file.name.endswith(".csv") else pd.read_excel(stu_file)
-            st.dataframe(df.head())
-            if st.button("➕ Nhập toàn bộ danh sách vào hệ thống", type="primary"):
-                records = []
-                for _, row in df.iterrows():
-                    records.append({
-                        "full_name": str(row["Họ tên"]).strip(),
-                        "class_name": str(row["Lớp"]).strip().upper(),
-                        "username": str(row["Tài khoản"]).strip(),
-                        "password": str(row["Mật khẩu"]).strip()
-                    })
-                supabase.table("students").upsert(records).execute()
-                st.success(f"Đã cập nhật {len(records)} tài khoản học sinh!")
-                st.rerun()
+            try:
+                df = read_student_file_safe(stu_file)
+                df.columns = [str(c).strip() for c in df.columns]
+                st.dataframe(df.head(10), use_container_width=True)
+
+                if st.button("➕ Nhập toàn bộ danh sách vào hệ thống", type="primary"):
+                    records = []
+                    # Hỗ trợ nhận diện cột theo tên hoặc theo vị trí 4 cột đầu tiên nếu cột bị lệch dấu
+                    cols = list(df.columns)
+                    col_name = "Họ tên" if "Họ tên" in cols else cols[0]
+                    col_cls = "Lớp" if "Lớp" in cols else cols[1]
+                    col_usr = "Tài khoản" if "Tài khoản" in cols else cols[2]
+                    col_pwd = "Mật khẩu" if "Mật khẩu" in cols else cols[3]
+
+                    for _, row in df.iterrows():
+                        u_val = str(row[col_usr]).strip()
+                        if not u_val or u_val.lower() == "nan":
+                            continue
+                        records.append({
+                            "full_name": str(row[col_name]).strip(),
+                            "class_name": str(row[col_cls]).strip().upper(),
+                            "username": u_val,
+                            "password": str(row[col_pwd]).strip()
+                        })
+                    supabase.table("students").upsert(records, on_conflict="username").execute()
+                    st.success(f"🎉 Đã cập nhật thành công {len(records)} tài khoản học sinh!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"⚠️ Không thể đọc file danh sách lớp: {e}")
 
         st.divider()
         st.subheader("2. Danh sách Học sinh theo từng Lớp")
