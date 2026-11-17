@@ -20,12 +20,10 @@ html, body, [class*="css"] {
     font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* Nền trang nhẹ nhàng, chống mỏi mắt khi làm bài lâu */
 .stApp {
     background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
-/* Hộp câu hỏi chính (Question Card) */
 .question-card {
     background: #ffffff;
     border-radius: 14px;
@@ -40,7 +38,6 @@ html, body, [class*="css"] {
     border-color: #cbd5e1;
 }
 
-/* Thanh tiêu đề từng Phần */
 .section-banner-p1 {
     background: linear-gradient(90deg, #1d4ed8 0%, #3b82f6 100%);
     color: white;
@@ -82,7 +79,6 @@ html, body, [class*="css"] {
     box-shadow: 0 3px 10px rgba(4, 120, 87, 0.2);
 }
 
-/* Huy hiệu số thứ tự câu hỏi */
 .q-badge {
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: #ffffff;
@@ -105,7 +101,6 @@ html, body, [class*="css"] {
     border: 1px solid #cbd5e1;
 }
 
-/* Nút chọn Radio trắc nghiệm hiện đại */
 div[role="radiogroup"] > label {
     background-color: #ffffff !important;
     border: 1.5px solid #e2e8f0 !important;
@@ -124,7 +119,6 @@ div[role="radiogroup"] > label:hover {
     box-shadow: 0 4px 8px rgba(59, 130, 246, 0.1);
 }
 
-/* Hộp hiển thị lời giải chi tiết */
 .solution-box {
     background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
     border-left: 5px solid #16a34a;
@@ -134,7 +128,6 @@ div[role="radiogroup"] > label:hover {
     color: #1e293b;
 }
 
-/* Hộp hiển thị phương án trong trình duyệt của Giáo viên */
 .opt-box-true {
     background-color: #ecfdf5;
     border: 1.5px solid #10b981;
@@ -185,7 +178,7 @@ LEVEL_COLORS = {
     "C": ("#fce7f3", "#9d174d")
 }
 
-# ================= HÀM KIỂM TRA TRẠNG THÁI HIỂN THỊ & Dựng THẺ CÂU HỎI =================
+# ================= HÀM KIỂM TRA TRẠNG THÁI HIỂN THỊ & DỰNG THẺ CÂU HỎI =================
 def check_question_health(q):
     """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh ex_test không"""
     issues = []
@@ -242,7 +235,6 @@ def render_question_card(q, index_label):
             icon = "✅" if is_t else "⚪"
             lbl = labels[idx] if idx < 4 else str(idx + 1)
             box_cls = "opt-box-true" if is_t else "opt-box-false"
-            # QUAN TRỌNG: Phải có \n\n sau thẻ mở <div> và trước thẻ đóng </div> để Streamlit kích hoạt MathJax
             cols[idx % 2].markdown(
                 f'<div class="{box_cls}">\n\n{icon} **{lbl}.** {opt.get("text", "")}\n\n</div>',
                 unsafe_allow_html=True
@@ -502,7 +494,6 @@ def find_replacement_question(current_q, all_exam_qs):
     lesson = current_q.get("lesson_code", "B1")
     lvl = current_q.get("level_code", "N")
 
-    # Ưu tiên 1: Cùng Bài học + Cùng Phần + Cùng Mức độ
     pool = (
         supabase.table("question_bank")
         .select("*")
@@ -515,7 +506,6 @@ def find_replacement_question(current_q, all_exam_qs):
     )
     candidates = [item for item in pool if item["question_hash"] not in used_hashes]
 
-    # Ưu tiên 2: Cùng Bài học + Cùng Phần (mọi mức độ)
     if not candidates:
         pool2 = (
             supabase.table("question_bank")
@@ -528,7 +518,6 @@ def find_replacement_question(current_q, all_exam_qs):
         )
         candidates = [item for item in pool2 if item["question_hash"] not in used_hashes]
 
-    # Ưu tiên 3: Cùng Chương + Cùng Phần + Cùng Mức độ
     if not candidates:
         pool3 = (
             supabase.table("question_bank")
@@ -742,22 +731,23 @@ with st.sidebar:
         st.rerun()
 
 # =====================================================================
-# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN
+# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (TÁCH 5 TAB ĐỘC LẬP, DỄ QUẢN LÝ)
 # =====================================================================
 if st.session_state.role == "teacher":
     st.title("👨‍🏫 Bảng Điều Khiển Giáo Viên")
-    t_bank, t_exam, t_stu, t_res = st.tabs([
-        "🏦 1. Ngân hàng Câu hỏi & Trộn đề (KNTT)",
-        "📄 2. Tạo đề nhanh & Quản lý / Đổi câu Đề thi",
-        "👥 3. Quản lý Học sinh theo Lớp",
-        "📊 4. Bảng điểm, Giám sát & Thống kê câu sai"
+    t_bank, t_matrix, t_exam, t_stu, t_res = st.tabs([
+        "🏦 1. Quản lý Ngân hàng Câu hỏi",
+        "🎲 2. Trộn đề theo Ma trận từng Bài",
+        "📄 3. Tạo đề nhanh & Quản lý Đề thi",
+        "👥 4. Quản lý Học sinh theo Lớp",
+        "📊 5. Bảng điểm, Giám sát & Thống kê"
     ])
 
     # -----------------------------------------------------------------
-    # TAB 1: NGÂN HÀNG CÂU HỎI & TRỘN ĐỀ MA TRẬN (SÁCH KẾT NỐI TRI THỨC)
+    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
     # -----------------------------------------------------------------
     with t_bank:
-        st.subheader("📥 1. Nạp câu hỏi từ file (.tex hoặc .txt) vào Ngân hàng (Có Sửa/Xóa nhanh)")
+        st.subheader("📥 1. Nạp câu hỏi từ file (.tex hoặc .txt) vào Ngân hàng")
         st.info("💡 Hỗ trợ nhận diện cả câu trắc nghiệm (`\\begin{ex}`) và bài tập Tự luận (`\\begin{bt}`). Bạn có thể sửa mã ID hoặc xóa trực tiếp các câu lỗi trước khi bấm Lưu vào Ngân hàng.")
 
         c_def_g, c_def_c = st.columns([1, 2])
@@ -791,7 +781,6 @@ if st.session_state.role == "teacher":
                     f"🟢 Hiển thị tốt: **{ok_count} câu** | 🟠 Cần lưu ý: **{warn_count} câu**."
                 )
 
-                # BẢNG SỬA NHANH MÃ ID VÀ TÍCH CHỌN XÓA HÀNG LOẠT TRƯỚC KHI LƯU
                 st.markdown("##### ⚡ Bảng sửa nhanh Mã ID & Tích chọn xóa câu không ổn:")
                 edit_rows = []
                 for idx, q in enumerate(staged_qs):
@@ -812,8 +801,7 @@ if st.session_state.role == "teacher":
                     key="staged_table_editor"
                 )
 
-                c_act1, c_act2 = st.columns([1, 1])
-                if c_act1.button("🛠️ Áp dụng sửa Mã ID & Xóa các dòng đã tích chọn"):
+                if st.button("🛠️ Áp dụng sửa Mã ID & Xóa các dòng đã tích chọn"):
                     new_staged = []
                     for idx, row in edited_df.iterrows():
                         if not row["Xóa"]:
@@ -830,7 +818,6 @@ if st.session_state.role == "teacher":
                     st.toast("✅ Đã cập nhật danh sách câu hỏi tạm!")
                     st.rerun()
 
-                # TRÌNH KIỂM TRA TRỰC QUAN KÈM NÚT XÓA / SỬA TỪNG CÂU
                 with st.expander("👁️ Xem chi tiết, Sửa nội dung hoặc Xóa nhanh từng câu hỏi trước khi lưu", expanded=(warn_count > 0)):
                     flt_mode = st.radio(
                         "Chế độ lọc câu hỏi xem trước:",
@@ -915,7 +902,146 @@ if st.session_state.role == "teacher":
                         st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
 
         st.divider()
-        st.subheader("🎲 2. Rút câu hỏi & Trộn đề thi từ Ngân hàng (Kèm Xem trước & Đổi câu hỏi)")
+        st.subheader("🔍 2. Duyệt, Kiểm tra hiển thị & Sửa/Xóa câu hỏi trong Ngân hàng")
+
+        b_col1, b_col2, b_col3 = st.columns([1, 2, 2])
+        b_sel_g = b_col1.selectbox("Lọc theo Khối:", ["12", "11", "10", "9", "8", "7", "6"], key="b_mgr_g")
+        b_avail_chaps = KNTT_DATA[b_sel_g]["chapters"]
+        b_sel_c = b_col2.selectbox("Lọc theo Chương:", list(b_avail_chaps.keys()), format_func=lambda k: b_avail_chaps[k], key="b_mgr_c")
+        b_chap_lessons = {b_k: b_v[1] for b_k, b_v in KNTT_DATA[b_sel_g]["lessons"].items() if b_v[0] == b_sel_c}
+        b_sel_lessons = b_col3.multiselect(
+            "Lọc theo Bài học (Để trống = Cả chương):",
+            options=list(b_chap_lessons.keys()),
+            format_func=lambda k: b_chap_lessons[k],
+            key="b_mgr_l"
+        )
+
+        bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id", desc=True).execute().data
+        if b_sel_lessons:
+            bank_items = [item for item in bank_items if item["lesson_code"] in b_sel_lessons]
+
+        if not bank_items:
+            st.info("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này.")
+        else:
+            ok_b = sum(1 for item in bank_items if "✅" in check_question_health(item["question_data"]))
+            warn_b = len(bank_items) - ok_b
+            st.write(
+                f"📊 **Hiện có `{len(bank_items)}` câu hỏi trong mục đang chọn** "
+                f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
+            )
+
+            bank_flt1, bank_flt2 = st.columns([2, 2])
+            b_status_filter = bank_flt1.selectbox(
+                "Lọc theo trạng thái biên dịch:",
+                ["Tất cả câu hỏi", "⚠️ Chỉ xem câu có cảnh báo", "✅ Chỉ xem câu hiển thị tốt"],
+                key="bank_health_flt"
+            )
+            b_part_filter = bank_flt2.selectbox(
+                "Lọc theo Phần:",
+                ["Tất cả các phần", "Phần 1 (ABCD)", "Phần 2 (Đúng/Sai)", "Phần 3 (Trả lời ngắn)", "Phần 4 (Tự luận)"],
+                key="bank_part_flt"
+            )
+
+            inspect_list = []
+            for item in bank_items:
+                h_str = check_question_health(item["question_data"])
+                if b_status_filter.startswith("⚠️") and "✅" in h_str:
+                    continue
+                if b_status_filter.startswith("✅") and "✅" not in h_str:
+                    continue
+                if b_part_filter.startswith("Phần 1") and item["part"] != 1:
+                    continue
+                if b_part_filter.startswith("Phần 2") and item["part"] != 2:
+                    continue
+                if b_part_filter.startswith("Phần 3") and item["part"] != 3:
+                    continue
+                if b_part_filter.startswith("Phần 4") and item["part"] != 4:
+                    continue
+                inspect_list.append(item)
+
+            if not inspect_list:
+                st.info("Không có câu hỏi nào khớp với bộ lọc.")
+            else:
+                b_page_size = 10
+                b_total_pages = max(1, (len(inspect_list) + b_page_size - 1) // b_page_size)
+                b_cur_page = st.number_input(
+                    f"Trang danh sách câu hỏi (1 - {b_total_pages}, tổng {len(inspect_list)} câu):",
+                    min_value=1, max_value=b_total_pages, value=1, key="bank_inspect_page"
+                )
+                b_start = (b_cur_page - 1) * b_page_size
+                for item in inspect_list[b_start:b_start + b_page_size]:
+                    qd = item["question_data"]
+                    c_card, c_act = st.columns([6.2, 1])
+                    with c_card:
+                        render_question_card(qd, f"ID Kho #{item['id']}")
+                    with c_act:
+                        if st.button("🗑️ Xóa", key=f"del_qb_{item['id']}"):
+                            supabase.table("question_bank").delete().eq("id", item["id"]).execute()
+                            st.toast(f"Đã xóa câu #{item['id']} khỏi Ngân hàng!")
+                            st.rerun()
+
+                    with st.expander(f"✏️ Sửa Mã ID / Nội dung câu #{item['id']}"):
+                        db_tag = st.text_input("Mã ID (VD: 10-C1-B1-N)", value=item.get("tag_id", ""), key=f"db_tag_{item['id']}")
+                        db_stem = st.text_area("Nội dung đề bài", value=qd.get("stem", ""), height=100, key=f"db_stem_{item['id']}")
+                        db_sa = None
+                        if item["part"] == 3:
+                            db_sa = st.text_input("Đáp số trả lời ngắn", value=str(qd.get("short_ans", "")), key=f"db_sa_{item['id']}")
+                        db_sol = st.text_area("Lời giải chi tiết", value=qd.get("solution", ""), height=100, key=f"db_sol_{item['id']}")
+                        if st.button("💾 Cập nhật vào Ngân hàng", key=f"btn_upd_qb_{item['id']}", type="primary"):
+                            updated_q = apply_quick_edit_to_question(qd, db_tag, db_stem, db_sol, db_sa)
+                            supabase.table("question_bank").update({
+                                "tag_id": updated_q["tag_id"],
+                                "grade": str(updated_q["grade"]),
+                                "chapter_code": updated_q["chapter_code"],
+                                "chapter_name": updated_q["chapter_name"],
+                                "lesson_code": updated_q["lesson_code"],
+                                "lesson_name": updated_q["lesson_name"],
+                                "level_code": updated_q["level_code"],
+                                "level_name": updated_q["level_name"],
+                                "question_data": updated_q,
+                                "question_hash": updated_q["question_hash"]
+                            }).eq("id", item["id"]).execute()
+                            st.success(f"Đã cập nhật câu #{item['id']} thành công!")
+                            st.rerun()
+                    st.divider()
+
+        st.divider()
+        # KHU VỰC XÓA SẠCH NGÂN HÀNG CÂU HỎI CÓ XÁC THỰC 2 LỚP
+        with st.expander("🚨 3. Xóa sạch Ngân hàng câu hỏi để giải phóng bộ nhớ Supabase (Khu vực nguy hiểm)"):
+            st.warning(
+                "⚠️ **Cảnh báo quan trọng:** Hành động này sẽ xóa vĩnh viễn các câu hỏi trong bảng `question_bank` trên Supabase để giải phóng bộ nhớ. "
+                "Các đề thi đã xuất bản ở Tab 3 sẽ không bị ảnh hưởng."
+            )
+            del_scope = st.radio(
+                "Chọn phạm vi Ngân hàng muốn xóa:",
+                [
+                    "🔥 Xóa TOÀN BỘ Ngân hàng câu hỏi (Tất cả các Khối 6 - 12)",
+                    f"🧹 Chỉ xóa câu hỏi thuộc Khối {b_sel_g} đang chọn ở trên"
+                ],
+                key="del_bank_scope"
+            )
+            confirm_chk = st.checkbox("Tôi đã hiểu và chắc chắn muốn xóa dữ liệu Ngân hàng câu hỏi đã chọn.", key="chk_wipe_bank")
+            confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` (viết hoa, không dấu) để mở khóa nút xóa:", key="txt_wipe_bank")
+
+            can_wipe = confirm_chk and (confirm_txt.strip() == "XOA NGAN HANG")
+            if st.button("🗑️ TIẾN HÀNH XÓA NGÂN HÀNG CÂU HỎI", type="primary", disabled=not can_wipe):
+                try:
+                    if del_scope.startswith("🔥"):
+                        supabase.table("question_bank").delete().gt("id", 0).execute()
+                        st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và giải phóng bộ nhớ Supabase thành công!")
+                    else:
+                        supabase.table("question_bank").delete().eq("grade", b_sel_g).execute()
+                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {b_sel_g} thành công!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi khi xóa ngân hàng: {e}")
+
+    # -----------------------------------------------------------------
+    # TAB 2: TRỘN ĐỀ THI THEO MA TRẬN CHI TIẾT TỪNG BÀI HỌC
+    # -----------------------------------------------------------------
+    with t_matrix:
+        st.subheader("🎲 Thiết lập Ma trận & Rút câu hỏi ngẫu nhiên theo từng Bài học")
+        st.info("💡 Bạn có thể chọn nhiều Chương, tích chọn các Bài học đã dạy và **nhập số lượng câu hỏi cần lấy riêng cho từng Bài học** ở bên dưới.")
 
         f_col1, f_col2 = st.columns([1, 3])
         sel_g = f_col1.selectbox("1. Chọn Khối lớp", ["12", "11", "10", "9", "8", "7", "6"], key="mat_g")
@@ -923,7 +1049,7 @@ if st.session_state.role == "teacher":
         chap_keys = list(avail_chaps.keys())
 
         sel_chaps = f_col2.multiselect(
-            "2. Chọn 1 hoặc nhiều Chương:",
+            "2. Chọn 1 hoặc nhiều Chương cần kiểm tra:",
             options=chap_keys,
             default=[chap_keys[0]] if chap_keys else [],
             format_func=lambda k: avail_chaps[k],
@@ -939,217 +1065,186 @@ if st.session_state.role == "teacher":
                     avail_lessons[b_k] = f"[{c_k}] {b_name}"
 
             sel_lessons = st.multiselect(
-                "3. Chọn các Bài học cần kiểm tra (Tích chọn các bài riêng lẻ đã học; để trống = lấy tất cả bài thuộc chương đã chọn):",
+                "3. Chọn các Bài học cần đưa vào Ma trận đề thi (VD: Chỉ chọn Bài 1, Bài 2):",
                 options=list(avail_lessons.keys()),
-                default=list(avail_lessons.keys()),
+                default=list(avail_lessons.keys())[:2] if len(avail_lessons) >= 2 else list(avail_lessons.keys()),
                 format_func=lambda k: avail_lessons[k],
                 key=f"mat_multi_b_{sel_g}_{'_'.join(sel_chaps)}"
             )
 
-            q_query = supabase.table("question_bank").select("*").eq("grade", sel_g).in_("chapter_code", sel_chaps).execute().data
-            if sel_lessons:
-                q_query = [item for item in q_query if item["lesson_code"] in sel_lessons]
-
-            if not q_query:
-                st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc các Chương/Bài học đang chọn.")
+            if not sel_lessons:
+                st.warning("👆 Vui lòng chọn ít nhất 1 Bài học ở mục 3 để hiển thị bảng ma trận từng bài.")
             else:
-                ok_bank = sum(1 for item in q_query if "✅" in check_question_health(item["question_data"]))
-                warn_bank = len(q_query) - ok_bank
-                st.write(
-                    f"📊 **Kho câu hỏi theo bộ lọc hiện có: `{len(q_query)}` câu** "
-                    f"(🟢 `{ok_bank}` câu hiển thị chuẩn | 🟠 `{warn_bank}` câu có cảnh báo)"
+                q_query = (
+                    supabase.table("question_bank")
+                    .select("*")
+                    .eq("grade", sel_g)
+                    .in_("chapter_code", sel_chaps)
+                    .in_("lesson_code", sel_lessons)
+                    .execute()
+                    .data
                 )
 
-                matrix_counts = {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3, 4]}
-                for item in q_query:
-                    p_val = item["part"]
-                    l_val = item["level_code"] if item["level_code"] in ["N", "H", "V", "C"] else "N"
-                    if p_val in matrix_counts:
-                        matrix_counts[p_val][l_val].append(item)
-
-                stat_df = pd.DataFrame([
-                    {
-                        "Dạng câu hỏi": PART_LABELS[p_i],
-                        "Nhận biết (N)": len(matrix_counts[p_i]["N"]),
-                        "Thông hiểu (H)": len(matrix_counts[p_i]["H"]),
-                        "Vận dụng (V)": len(matrix_counts[p_i]["V"]),
-                        "Vận dụng cao (C)": len(matrix_counts[p_i]["C"])
+                if not q_query:
+                    st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc các Bài học đang chọn. Hãy sang Tab 1 để nạp câu hỏi trước nhé!")
+                else:
+                    # Phân loại kho câu hỏi theo từng Bài học -> Phần (1..4) -> Mức độ (N, H, V, C)
+                    lesson_pools = {
+                        b_code: {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3, 4]}
+                        for b_code in sel_lessons
                     }
-                    for p_i in [1, 2, 3, 4]
-                ])
-                st.dataframe(stat_df, use_container_width=True, hide_index=True)
-
-                # CÔNG CỤ DUYỆT, SỬA & XÓA NHANH CÂU HỎI TRONG NGÂN HÀNG
-                with st.expander(f"👁️ Duyệt, Sửa nhanh hoặc Xóa câu hỏi trong Ngân hàng ({len(q_query)} câu)"):
-                    bank_flt1, bank_flt2 = st.columns([2, 2])
-                    b_status_filter = bank_flt1.selectbox(
-                        "Lọc theo trạng thái biên dịch:",
-                        ["Tất cả câu hỏi", "⚠️ Chỉ xem câu có cảnh báo", "✅ Chỉ xem câu hiển thị tốt"],
-                        key="bank_health_flt"
-                    )
-                    b_part_filter = bank_flt2.selectbox(
-                        "Lọc theo Phần:",
-                        ["Tất cả các phần", "Phần 1 (ABCD)", "Phần 2 (Đúng/Sai)", "Phần 3 (Trả lời ngắn)", "Phần 4 (Tự luận)"],
-                        key="bank_part_flt"
-                    )
-
-                    inspect_list = []
                     for item in q_query:
-                        h_str = check_question_health(item["question_data"])
-                        if b_status_filter.startswith("⚠️") and "✅" in h_str:
-                            continue
-                        if b_status_filter.startswith("✅") and "✅" not in h_str:
-                            continue
-                        if b_part_filter.startswith("Phần 1") and item["part"] != 1:
-                            continue
-                        if b_part_filter.startswith("Phần 2") and item["part"] != 2:
-                            continue
-                        if b_part_filter.startswith("Phần 3") and item["part"] != 3:
-                            continue
-                        if b_part_filter.startswith("Phần 4") and item["part"] != 4:
-                            continue
-                        inspect_list.append(item)
+                        b_c = item.get("lesson_code")
+                        p_v = item.get("part", 1)
+                        l_v = item.get("level_code", "N")
+                        if l_v not in ["N", "H", "V", "C"]:
+                            l_v = "N"
+                        if b_c in lesson_pools and p_v in lesson_pools[b_c]:
+                            lesson_pools[b_c][p_v][l_v].append(item)
 
-                    if not inspect_list:
-                        st.info("Không có câu hỏi nào khớp với bộ lọc kiểm tra.")
-                    else:
-                        b_page_size = 10
-                        b_total_pages = max(1, (len(inspect_list) + b_page_size - 1) // b_page_size)
-                        b_cur_page = st.number_input(
-                            f"Trang danh sách câu hỏi (1 - {b_total_pages}, tổng {len(inspect_list)} câu):",
-                            min_value=1, max_value=b_total_pages, value=1, key="bank_inspect_page"
-                        )
-                        b_start = (b_cur_page - 1) * b_page_size
-                        for item in inspect_list[b_start:b_start + b_page_size]:
-                            qd = item["question_data"]
-                            c_card, c_act = st.columns([6.2, 1])
-                            with c_card:
-                                render_question_card(qd, f"ID Kho #{item['id']}")
-                            with c_act:
-                                if st.button("🗑️ Xóa", key=f"del_qb_{item['id']}"):
-                                    supabase.table("question_bank").delete().eq("id", item["id"]).execute()
-                                    st.toast(f"Đã xóa câu #{item['id']} khỏi Ngân hàng!")
-                                    st.rerun()
+                    # BẢNG TỔNG QUAN SỐ LƯỢNG CÂU HIỆN CÓ TRONG KHO THEO TỪNG BÀI
+                    summary_rows = []
+                    for b_code in sel_lessons:
+                        b_pool = lesson_pools[b_code]
+                        total_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
+                        summary_rows.append({
+                            "Mã Bài": b_code,
+                            "Tên Bài học": avail_lessons[b_code],
+                            "Tổng có trong kho": f"{total_b} câu",
+                            "Phần I (ABCD)": f"N:{len(b_pool[1]['N'])} | H:{len(b_pool[1]['H'])} | V:{len(b_pool[1]['V'])} | C:{len(b_pool[1]['C'])}",
+                            "Phần II (Đ/S)": f"N:{len(b_pool[2]['N'])} | H:{len(b_pool[2]['H'])} | V:{len(b_pool[2]['V'])} | C:{len(b_pool[2]['C'])}",
+                            "Phần III (TLN)": f"N:{len(b_pool[3]['N'])} | H:{len(b_pool[3]['H'])} | V:{len(b_pool[3]['V'])} | C:{len(b_pool[3]['C'])}",
+                            "Phần IV (Tự luận)": f"N:{len(b_pool[4]['N'])} | H:{len(b_pool[4]['H'])} | V:{len(b_pool[4]['V'])} | C:{len(b_pool[4]['C'])}"
+                        })
+                    st.markdown("##### 📊 Thống kê số lượng câu hỏi hiện có trong Ngân hàng theo từng Bài học đã chọn:")
+                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-                            with st.expander(f"✏️ Sửa Mã ID / Nội dung câu #{item['id']}"):
-                                db_tag = st.text_input("Mã ID (VD: 10-C1-B1-N)", value=item.get("tag_id", ""), key=f"db_tag_{item['id']}")
-                                db_stem = st.text_area("Nội dung đề bài", value=qd.get("stem", ""), height=100, key=f"db_stem_{item['id']}")
-                                db_sa = None
-                                if item["part"] == 3:
-                                    db_sa = st.text_input("Đáp số trả lời ngắn", value=str(qd.get("short_ans", "")), key=f"db_sa_{item['id']}")
-                                db_sol = st.text_area("Lời giải chi tiết", value=qd.get("solution", ""), height=100, key=f"db_sol_{item['id']}")
-                                if st.button("💾 Cập nhật vào Ngân hàng", key=f"btn_upd_qb_{item['id']}", type="primary"):
-                                    updated_q = apply_quick_edit_to_question(qd, db_tag, db_stem, db_sol, db_sa)
-                                    supabase.table("question_bank").update({
-                                        "tag_id": updated_q["tag_id"],
-                                        "grade": str(updated_q["grade"]),
-                                        "chapter_code": updated_q["chapter_code"],
-                                        "chapter_name": updated_q["chapter_name"],
-                                        "lesson_code": updated_q["lesson_code"],
-                                        "lesson_name": updated_q["lesson_name"],
-                                        "level_code": updated_q["level_code"],
-                                        "level_name": updated_q["level_name"],
-                                        "question_data": updated_q,
-                                        "question_hash": updated_q["question_hash"]
-                                    }).eq("id", item["id"]).execute()
-                                    st.success(f"Đã cập nhật câu #{item['id']} thành công!")
+                    st.markdown("#### 🎯 Nhập số lượng câu muốn bốc riêng cho TỪNG BÀI HỌC:")
+                    picked_per_lesson = {}
+                    total_by_part = {1: 0, 2: 0, 3: 0, 4: 0}
+
+                    for b_code in sel_lessons:
+                        b_pool = lesson_pools[b_code]
+                        total_avail_in_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
+                        with st.expander(f"📘 {avail_lessons[b_code]} (Trong kho hiện có: {total_avail_in_b} câu)", expanded=True):
+                            if total_avail_in_b == 0:
+                                st.caption("*(Bài học này hiện chưa có câu hỏi nào trong Ngân hàng)*")
+                            else:
+                                for p_idx in [1, 2, 3, 4]:
+                                    max_n = len(b_pool[p_idx]["N"])
+                                    max_h = len(b_pool[p_idx]["H"])
+                                    max_v = len(b_pool[p_idx]["V"])
+                                    max_c = len(b_pool[p_idx]["C"])
+                                    if (max_n + max_h + max_v + max_c) == 0:
+                                        for lv in ["N", "H", "V", "C"]:
+                                            picked_per_lesson[(b_code, p_idx, lv)] = 0
+                                        continue
+
+                                    c_lbl, mc1, mc2, mc3, mc4 = st.columns([1.8, 1, 1, 1, 1])
+                                    c_lbl.markdown(f"<div style='padding-top:28px;font-weight:600;'>{PART_LABELS[p_idx]}</div>", unsafe_allow_html=True)
+                                    val_n = mc1.number_input(f"NB (Có {max_n})", 0, max_n, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_N")
+                                    val_h = mc2.number_input(f"TH (Có {max_h})", 0, max_h, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_H")
+                                    val_v = mc3.number_input(f"VD (Có {max_v})", 0, max_v, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_V")
+                                    val_c = mc4.number_input(f"VDC (Có {max_c})", 0, max_c, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_C")
+
+                                    picked_per_lesson[(b_code, p_idx, "N")] = val_n
+                                    picked_per_lesson[(b_code, p_idx, "H")] = val_h
+                                    picked_per_lesson[(b_code, p_idx, "V")] = val_v
+                                    picked_per_lesson[(b_code, p_idx, "C")] = val_c
+                                    total_by_part[p_idx] += (val_n + val_h + val_v + val_c)
+
+                    grand_total_qs = sum(total_by_part.values())
+                    st.info(
+                        f"📌 **Tổng số câu đã chọn trên Ma trận:** **{grand_total_qs} câu** — "
+                        f"Phần I: `{total_by_part[1]}` câu | Phần II: `{total_by_part[2]}` câu | "
+                        f"Phần III: `{total_by_part[3]}` câu | Phần IV (Tự luận): `{total_by_part[4]}` câu."
+                    )
+
+                    if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
+                        selected_qs = []
+                        # Gom câu hỏi theo thứ tự Phần 1 -> Phần 2 -> Phần 3 -> Phần 4, bên trong lấy đúng số câu từng Bài học
+                        for p_idx in [1, 2, 3, 4]:
+                            for b_code in sel_lessons:
+                                for lvl in ["N", "H", "V", "C"]:
+                                    need_cnt = picked_per_lesson.get((b_code, p_idx, lvl), 0)
+                                    if need_cnt > 0:
+                                        pool = lesson_pools[b_code][p_idx][lvl]
+                                        chosen_items = random.sample(pool, need_cnt)
+                                        for item in chosen_items:
+                                            q_copy = item["question_data"].copy()
+                                            q_copy["id"] = f"q_{len(selected_qs) + 1}"
+                                            selected_qs.append(q_copy)
+
+                        if not selected_qs:
+                            st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận các bài học phía trên!")
+                        else:
+                            st.session_state["draft_matrix_qs"] = selected_qs
+                            st.session_state["draft_matrix_grade"] = sel_g
+                            st.session_state["draft_matrix_chap"] = (
+                                avail_chaps[sel_chaps[0]] if len(sel_chaps) == 1 else ("Tổng hợp: " + ", ".join(sel_chaps))
+                            )
+                            st.rerun()
+
+                    # KHUNG XEM BẢN NHÁP ĐỀ THI ĐẦY ĐỦ + NÚT ĐỔI CÂU HỎI KHÁC
+                    if st.session_state.get("draft_matrix_qs"):
+                        draft_qs = st.session_state["draft_matrix_qs"]
+                        st.markdown("---")
+                        st.subheader(f"🧐 Xem kỹ Bản nháp Đề thi ({len(draft_qs)} câu) & Đổi câu hỏi")
+                        st.info("💡 Bạn có thể xem chi tiết từng câu hỏi + lời giải dưới đây. Nếu thấy câu nào chưa ưng ý, hãy bấm **🔄 Đổi câu khác** để hệ thống tự rút 1 câu khác cùng Bài & Mức độ từ Ngân hàng.")
+
+                        for d_idx, dq in enumerate(draft_qs):
+                            col_dcard, col_dbtn = st.columns([5.8, 1.2])
+                            with col_dcard:
+                                render_question_card(dq, f"Câu {d_idx + 1}")
+                            with col_dbtn:
+                                if st.button("🔄 Đổi câu khác", key=f"swap_draft_{d_idx}", use_container_width=True):
+                                    new_q = find_replacement_question(dq, draft_qs)
+                                    if new_q:
+                                        draft_qs[d_idx] = new_q
+                                        st.session_state["draft_matrix_qs"] = draft_qs
+                                        st.toast(f"✅ Đã đổi Câu {d_idx + 1} sang một câu hỏi mới!")
+                                        st.rerun()
+                                    else:
+                                        st.warning("Kho không còn câu hỏi dự phòng nào khác cùng Bài/Mức độ này!")
+                                if st.button("🗑️ Xóa câu này", key=f"rm_draft_{d_idx}", use_container_width=True):
+                                    draft_qs.pop(d_idx)
+                                    for idx_re, q_re in enumerate(draft_qs):
+                                        q_re["id"] = f"q_{idx_re + 1}"
+                                    st.session_state["draft_matrix_qs"] = draft_qs
                                     st.rerun()
                             st.divider()
 
-                st.markdown("#### 🎯 Nhập số lượng câu muốn bốc ngẫu nhiên cho đề thi (Bao gồm cả Tự luận):")
-                picked_config = {}
-                for p_idx in [1, 2, 3, 4]:
-                    st.markdown(f"**{PART_LABELS[p_idx]}:**")
-                    mc1, mc2, mc3, mc4 = st.columns(4)
-                    max_n = len(matrix_counts[p_idx]["N"])
-                    max_h = len(matrix_counts[p_idx]["H"])
-                    max_v = len(matrix_counts[p_idx]["V"])
-                    max_c = len(matrix_counts[p_idx]["C"])
-                    picked_config[(p_idx, "N")] = mc1.number_input(f"Nhận biết (Tối đa {max_n})", 0, max_n, 0, key=f"pk_{p_idx}_N")
-                    picked_config[(p_idx, "H")] = mc2.number_input(f"Thông hiểu (Tối đa {max_h})", 0, max_h, 0, key=f"pk_{p_idx}_H")
-                    picked_config[(p_idx, "V")] = mc3.number_input(f"Vận dụng (Tối đa {max_v})", 0, max_v, 0, key=f"pk_{p_idx}_V")
-                    picked_config[(p_idx, "C")] = mc4.number_input(f"Vận dụng cao (Tối đa {max_c})", 0, max_c, 0, key=f"pk_{p_idx}_C")
+                        st.markdown("#### ⚙️ Thiết lập thông tin & Xuất bản chính thức Đề thi này:")
+                        mt1, mt2 = st.columns([3, 1])
+                        mat_title = mt1.text_input("Tên đề thi mới", placeholder="VD: Kiểm tra 45 phút - Chương 1 (Bài 1 & Bài 2)", key="pub_mat_title")
+                        mat_dur = mt2.number_input("Thời gian (phút)", 5, 180, 45, key="pub_mat_dur")
 
-                if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi (Để xem kỹ & đổi câu trước khi xuất bản)", type="primary"):
-                    selected_qs = []
-                    for p_idx in [1, 2, 3, 4]:
-                        for lvl in ["N", "H", "V", "C"]:
-                            need_cnt = picked_config[(p_idx, lvl)]
-                            if need_cnt > 0:
-                                pool = matrix_counts[p_idx][lvl]
-                                chosen_items = random.sample(pool, need_cnt)
-                                for item in chosen_items:
-                                    q_copy = item["question_data"].copy()
-                                    q_copy["id"] = f"q_{len(selected_qs) + 1}"
-                                    selected_qs.append(q_copy)
-                    if not selected_qs:
-                        st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận trên!")
-                    else:
-                        st.session_state["draft_matrix_qs"] = selected_qs
-                        st.session_state["draft_matrix_grade"] = sel_g
-                        st.session_state["draft_matrix_chap"] = avail_chaps[sel_chaps[0]] if len(sel_chaps) == 1 else ("Tổng hợp: " + ", ".join(sel_chaps))
-                        st.rerun()
+                        ms1, ms2, ms3, ms4 = st.columns(4)
+                        m_pt1 = ms1.number_input("Điểm mỗi câu Phần I", 0.0, 10.0, 0.25, 0.05, key="m_pt1")
+                        m_pt2 = ms2.number_input("Điểm tối đa mỗi câu Phần II", 0.0, 10.0, 1.0, 0.25, key="m_pt2")
+                        m_pt3 = ms3.number_input("Điểm mỗi câu Phần III", 0.0, 10.0, 0.5, 0.1, key="m_pt3")
+                        m_pt4 = ms4.number_input("Điểm mỗi câu Tự luận (Phần IV)", 0.0, 10.0, 1.0, 0.25, key="m_pt4")
 
-                # KHUNG XEM BẢN NHÁP ĐỀ THI ĐẦY ĐỦ + NÚT ĐỔI CÂU HỎI KHÁC
-                if st.session_state.get("draft_matrix_qs"):
-                    draft_qs = st.session_state["draft_matrix_qs"]
-                    st.markdown("---")
-                    st.subheader(f"🧐 Xem kỹ Bản nháp Đề thi ({len(draft_qs)} câu) & Đổi câu hỏi")
-                    st.info("💡 Bạn có thể xem chi tiết từng câu hỏi + lời giải dưới đây. Nếu thấy câu nào chưa ưng ý, hãy bấm **🔄 Đổi câu khác** để hệ thống tự rút 1 câu khác cùng Bài & Mức độ từ Ngân hàng.")
-
-                    for d_idx, dq in enumerate(draft_qs):
-                        col_dcard, col_dbtn = st.columns([5.8, 1.2])
-                        with col_dcard:
-                            render_question_card(dq, f"Câu {d_idx + 1}")
-                        with col_dbtn:
-                            if st.button("🔄 Đổi câu khác", key=f"swap_draft_{d_idx}", use_container_width=True):
-                                new_q = find_replacement_question(dq, draft_qs)
-                                if new_q:
-                                    draft_qs[d_idx] = new_q
-                                    st.session_state["draft_matrix_qs"] = draft_qs
-                                    st.toast(f"✅ Đã đổi Câu {d_idx + 1} sang một câu hỏi mới!")
-                                    st.rerun()
-                                else:
-                                    st.warning("Kho không còn câu hỏi dự phòng nào khác cùng Bài/Mức độ này!")
-                            if st.button("🗑️ Xóa câu này", key=f"rm_draft_{d_idx}", use_container_width=True):
-                                draft_qs.pop(d_idx)
-                                for idx_re, q_re in enumerate(draft_qs):
-                                    q_re["id"] = f"q_{idx_re + 1}"
-                                st.session_state["draft_matrix_qs"] = draft_qs
+                        if st.button("🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY", type="primary"):
+                            if not mat_title:
+                                st.warning("Vui lòng nhập Tên đề thi mới!")
+                            else:
+                                supabase.table("exams").insert({
+                                    "title": mat_title.strip(),
+                                    "grade": st.session_state.get("draft_matrix_grade", sel_g),
+                                    "chapter": st.session_state.get("draft_matrix_chap", ""),
+                                    "duration": mat_dur,
+                                    "questions": draft_qs,
+                                    "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
+                                    "show_solutions": False,
+                                    "is_active": True
+                                }).execute()
+                                del st.session_state["draft_matrix_qs"]
+                                st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công! Bạn có thể quản lý đề ở Tab 3.")
                                 st.rerun()
-                        st.divider()
-
-                    st.markdown("#### ⚙️ Thiết lập thông tin & Xuất bản chính thức Đề thi này:")
-                    mt1, mt2 = st.columns([3, 1])
-                    mat_title = mt1.text_input("Tên đề thi mới", placeholder="VD: Kiểm tra 45 phút - Chương 1", key="pub_mat_title")
-                    mat_dur = mt2.number_input("Thời gian (phút)", 5, 180, 45, key="pub_mat_dur")
-
-                    ms1, ms2, ms3, ms4 = st.columns(4)
-                    m_pt1 = ms1.number_input("Điểm mỗi câu Phần I", 0.0, 10.0, 0.25, 0.05, key="m_pt1")
-                    m_pt2 = ms2.number_input("Điểm tối đa mỗi câu Phần II", 0.0, 10.0, 1.0, 0.25, key="m_pt2")
-                    m_pt3 = ms3.number_input("Điểm mỗi câu Phần III", 0.0, 10.0, 0.5, 0.1, key="m_pt3")
-                    m_pt4 = ms4.number_input("Điểm mỗi câu Tự luận (Phần IV)", 0.0, 10.0, 1.0, 0.25, key="m_pt4")
-
-                    if st.button("🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY", type="primary"):
-                        if not mat_title:
-                            st.warning("Vui lòng nhập Tên đề thi mới!")
-                        else:
-                            supabase.table("exams").insert({
-                                "title": mat_title.strip(),
-                                "grade": st.session_state.get("draft_matrix_grade", sel_g),
-                                "chapter": st.session_state.get("draft_matrix_chap", ""),
-                                "duration": mat_dur,
-                                "questions": draft_qs,
-                                "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
-                                "show_solutions": False,
-                                "is_active": True
-                            }).execute()
-                            del st.session_state["draft_matrix_qs"]
-                            st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công!")
-                            st.rerun()
 
     # -----------------------------------------------------------------
-    # TAB 2: TẠO ĐỀ TRỰC TIẾP TỪ FILE & XEM / ĐỔI CÂU HỎI ĐỀ ĐÃ SOẠN
+    # TAB 3: TẠO ĐỀ TRỰC TIẾP TỪ FILE & XEM / ĐỔI CÂU HỎI ĐỀ ĐÃ SOẠN
     # -----------------------------------------------------------------
     with t_exam:
         st.subheader("1. Tải lên trực tiếp 1 đề thi hoàn chỉnh (.tex hoặc .txt)")
@@ -1238,7 +1333,6 @@ if st.session_state.role == "teacher":
                                 supabase.table("exams").delete().eq("id", ex["id"]).execute()
                                 st.rerun()
 
-                            # KHUNG XEM ĐẦY ĐỦ ĐỀ THI + NÚT ĐỔI CÂU HỎI KHÁC TRỰC TIẾP TRÊN ĐỀ ĐÃ SOẠN
                             with st.expander(f"👁️ Xem toàn bộ đề, Lời giải & Đổi câu hỏi của đề #{ex['id']} - {ex['title']}"):
                                 ex_qs = ex.get("questions", [])
                                 for q_idx, q_item in enumerate(ex_qs):
@@ -1264,7 +1358,7 @@ if st.session_state.role == "teacher":
                                     st.divider()
 
     # -----------------------------------------------------------------
-    # TAB 3: QUẢN LÝ HỌC SINH THEO LỚP
+    # TAB 4: QUẢN LÝ HỌC SINH THEO LỚP
     # -----------------------------------------------------------------
     with t_stu:
         st.subheader("1. Nhập danh sách lớp từ Excel / CSV")
@@ -1322,7 +1416,7 @@ if st.session_state.role == "teacher":
                         st.rerun()
 
     # -----------------------------------------------------------------
-    # TAB 4: BẢNG ĐIỂM, GIÁM SÁT CAMERA & THỐNG KÊ TỶ LỆ LÀM SAI TỪNG CÂU
+    # TAB 5: BẢNG ĐIỂM, GIÁM SÁT CAMERA & THỐNG KÊ TỶ LỆ LÀM SAI TỪNG CÂU
     # -----------------------------------------------------------------
     with t_res:
         exams_list = supabase.table("exams").select("*").order("id", desc=True).execute().data
@@ -1396,7 +1490,6 @@ if st.session_state.role == "teacher":
                         format_func=lambda x: f"{x['username']} - {(x.get('students') or {}).get('full_name', '')} (Lớp {(x.get('students') or {}).get('class_name', '')} | Rời màn hình: {x['tab_switches']} lần)"
                     )
                     if chosen_sub:
-                        # Xem bài làm Tự luận và cộng điểm tự luận (nếu có)
                         p4_qs = [q for q in selected_exam["questions"] if q.get("part") == 4]
                         if p4_qs:
                             st.markdown("#### ✍️ Bài làm Tự luận của học sinh:")
@@ -1666,7 +1759,7 @@ elif st.session_state.role == "student":
                         icon = "✅" if opt["is_true"] else ("❌" if is_u else "⚪")
                         st.markdown(f"{icon} {opt['text']}{badge}", unsafe_allow_html=True)
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box"><b>📖 Lời giải chi tiết:</b><br><br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p2):
                 with st.container(border=True):
@@ -1679,7 +1772,7 @@ elif st.session_state.role == "student":
                         icon = "✅" if u_tf == corr_tf else "❌"
                         st.markdown(f"{icon} {st_i['text']} — **Đáp án: {corr_tf}** *(Bạn chọn: {u_tf})*", unsafe_allow_html=True)
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box"><b>📖 Lời giải chi tiết:</b><br><br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p3):
                 with st.container(border=True):
@@ -1688,7 +1781,7 @@ elif st.session_state.role == "student":
                     u_sa = saved_answers.get(q["id"], "Chưa điền")
                     st.write(f"🔑 **Đáp số đúng:** `{q['short_ans']}` | **Bạn điền:** `{u_sa}`")
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box"><b>📖 Lời giải chi tiết:</b><br><br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p4):
                 with st.container(border=True):
@@ -1697,4 +1790,4 @@ elif st.session_state.role == "student":
                     u_es = saved_answers.get(q["id"], "Chưa trình bày")
                     st.info(f"**Bài làm của bạn:**\n\n{u_es}")
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box"><b>📖 Lời giải chuẩn:</b><br><br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chuẩn:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
