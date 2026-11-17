@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.0 - Support Tự Luận (bt/ex) & KNTT Tagging"
+PARSER_VERSION = "V5.1 - Fix lq/rq Quotes & Support Tự Luận (bt/ex)"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -75,6 +75,10 @@ def compile_latex_snippet_to_svg(latex_snippet):
     snippet_fixed = latex_snippet
     snippet_fixed = re.sub(r'\\(vec|vv)\b', r'\\overrightarrow', snippet_fixed)
     snippet_fixed = snippet_fixed.replace(r'\ch@p', 'black')
+    snippet_fixed = re.sub(r'\\lq\s*\\lq\s*', '``', snippet_fixed)
+    snippet_fixed = re.sub(r'\\rq\s*\\rq\s*', "''", snippet_fixed)
+    snippet_fixed = re.sub(r'\\lq\b\s*', '`', snippet_fixed)
+    snippet_fixed = re.sub(r'\\rq\b\s*', "'", snippet_fixed)
 
     extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed and os.path.exists(_TKZ_TAB_PATH)) else ""
 
@@ -90,6 +94,8 @@ def compile_latex_snippet_to_svg(latex_snippet):
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\providecommand{\wideparen}[1]{\widehat{#1}}" + "\n"
         r"\providecommand{\mathscr}[1]{\mathcal{#1}}" + "\n"
+        r"\providecommand{\lq}{`}" + "\n"
+        r"\providecommand{\rq}{'}" + "\n"
         r"\providecommand{\R}{\mathbb{R}}" + "\n"
         r"\providecommand{\N}{\mathbb{N}}" + "\n"
         r"\providecommand{\Z}{\mathbb{Z}}" + "\n"
@@ -236,6 +242,12 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
+    # Xử lý các dấu ngoặc kép \lq\lq và \rq\rq ngay từ đầu
+    text = re.sub(r'\\lq\s*\\lq\s*', '"', text)
+    text = re.sub(r'\\rq\s*\\rq\s*', '"', text)
+    text = re.sub(r'\\lq\b\s*', "'", text)
+    text = re.sub(r'\\rq\b\s*', "'", text)
+
     text = unwrap_immini(text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
@@ -352,8 +364,6 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
 
     parsed_q = None
 
-    # 1. Nếu là môi trường \begin{bt}...\end{bt} -> Mặc định là Câu hỏi Tự luận (part = 4)
-    # (Trừ khi bên trong bt vẫn có \choice, \choiceTF, \shortans thì vẫn ưu tiên bắt trắc nghiệm)
     tf_match = re.search(r'\\choiceTF(?![a-zA-Z])', ex_body)
     mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
     sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
@@ -413,7 +423,6 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
         }
 
     else:
-        # Không có \choice, \choiceTF, \shortans -> Nhận diện là Tự luận (Phần IV - part = 4)
         stem_clean = clean_latex_to_markdown(ex_body)
         if stem_clean:
             parsed_q = {
