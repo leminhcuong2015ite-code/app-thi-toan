@@ -746,67 +746,108 @@ if st.session_state.role == "teacher":
     # -----------------------------------------------------------------
     # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
     # -----------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
+    # -----------------------------------------------------------------
     with t_bank:
         st.subheader("📥 1. Nạp câu hỏi từ file (.tex hoặc .txt) vào Ngân hàng")
-        st.info("💡 Hỗ trợ nhận diện cả câu trắc nghiệm (`\\begin{ex}`) và bài tập Tự luận (`\\begin{bt}`). Bạn có thể sửa mã ID hoặc xóa trực tiếp các câu lỗi trước khi bấm Lưu vào Ngân hàng.")
+        st.info("💡 Hỗ trợ nhận diện cả câu trắc nghiệm (`\\begin{ex}`) và bài tập Tự luận (`\\begin{bt}`). Bạn có thể chọn tự động loại bỏ câu thiếu mã ID, tự gán thủ công hoặc gán theo mặc định.")
 
-        c_def_g, c_def_c = st.columns([1, 2])
-        fb_grade = c_def_g.selectbox("Khối mặc định (nếu câu hỏi thiếu mã ID)", ["12", "11", "10", "9", "8", "7", "6"], key="fb_g")
-        fb_chaps = KNTT_DATA[fb_grade]["chapters"]
-        fb_chap_code = c_def_c.selectbox("Chương mặc định (nếu thiếu mã ID)", list(fb_chaps.keys()), format_func=lambda k: fb_chaps[k], key="fb_c")
+        missing_id_mode = st.radio(
+            "⚙️ Tùy chọn xử lý khi phát hiện câu hỏi KHÔNG có mã ID:",
+            [
+                "🗑️ Tự động loại bỏ các câu hỏi không có mã ID",
+                "✍️ Giữ lại để tôi tự gán mã ID hoặc xóa thủ công ở bảng bên dưới",
+                "📌 Tự động gán theo Khối / Chương / Bài / Mức độ mặc định"
+            ],
+            key="missing_id_policy"
+        )
+
+        # Chỉ hiển thị bộ chọn Khối/Chương/Bài/Mức độ mặc định nếu người dùng chọn chế độ 3
+        fb_grade, fb_chap_code, fb_lesson_code, fb_lvl_code = "10", "C1", "B1", "N"
+        if missing_id_mode.startswith("📌"):
+            c_def1, c_def2, c_def3, c_def4 = st.columns([1, 2, 2, 1])
+            fb_grade = c_def1.selectbox("Khối mặc định", ["12", "11", "10", "9", "8", "7", "6"], index=2, key="fb_g")
+            fb_chaps = KNTT_DATA[fb_grade]["chapters"]
+            fb_chap_code = c_def2.selectbox("Chương mặc định", list(fb_chaps.keys()), format_func=lambda k: fb_chaps[k], key="fb_c")
+            fb_lessons = {bk: bv[1] for bk, bv in KNTT_DATA[fb_grade]["lessons"].items() if bv[0] == fb_chap_code}
+            fb_lesson_code = c_def3.selectbox("Bài mặc định", list(fb_lessons.keys()), format_func=lambda k: fb_lessons[k], key="fb_b")
+            fb_lvl_code = c_def4.selectbox("Mức độ mặc định", ["N", "H", "V", "C"], format_func=lambda k: f"{k} - {LEVEL_MAP[k]}", key="fb_lv")
 
         bank_tex_file = st.file_uploader("Chọn file .tex hoặc .txt chứa danh sách câu hỏi", type=["tex", "txt"], key="bank_up")
 
         if bank_tex_file:
-            file_sig = f"{bank_tex_file.name}_{bank_tex_file.size}"
+            file_sig = f"{bank_tex_file.name}_{bank_tex_file.size}_{missing_id_mode}_{fb_grade}_{fb_chap_code}_{fb_lesson_code}_{fb_lvl_code}"
             if st.session_state.get("staged_file_sig") != file_sig:
                 raw_bank_tex = bank_tex_file.read().decode("utf-8", errors="ignore")
-                with st.spinner("Đang biên dịch LaTeX/TikZ và nhận diện câu hỏi (gồm cả ex và bt)..."):
+                with st.spinner("Đang biên dịch LaTeX/TikZ và kiểm tra mã ID câu hỏi..."):
                     parsed_qs = parse_exam_tex(raw_bank_tex)
+                    processed_qs = []
+                    dropped_no_id = 0
+
                     for q in parsed_qs:
-                        if q["tag_id"] == "Chưa gắn mã":
-                            q["grade"] = fb_grade
-                            q["chapter_code"] = fb_chap_code
-                            q["chapter_name"] = fb_chaps[fb_chap_code]
-                    st.session_state["staged_bank_qs"] = parsed_qs
+                        if q.get("tag_id") == "Chưa gắn mã":
+                            if missing_id_mode.startswith("🗑️"):
+                                dropped_no_id += 1
+                                continue
+                            elif missing_id_mode.startswith("📌"):
+                                default_tag = f"{fb_grade}-{fb_chap_code}-{fb_lesson_code}-{fb_lvl_code}"
+                                meta = decode_kntt_tag(default_tag)
+                                if meta:
+                                    q.update(meta)
+                        processed_qs.append(q)
+
+                    st.session_state["staged_bank_qs"] = processed_qs
+                    st.session_state["dropped_no_id_count"] = dropped_no_id
                     st.session_state["staged_file_sig"] = file_sig
 
             staged_qs = st.session_state.get("staged_bank_qs", [])
+            dropped_cnt = st.session_state.get("dropped_no_id_count", 0)
 
-            if staged_qs:
+            if dropped_cnt > 0:
+                st.warning(f"🗑️ Đã tự động loại bỏ **{dropped_cnt} câu hỏi** không có mã ID theo tùy chọn của bạn.")
+
+            if not staged_qs:
+                st.warning("Không còn câu hỏi nào trong danh sách tạm (toàn bộ câu hỏi trong file đều thiếu mã ID và đã bị loại bỏ).")
+            else:
                 ok_count = sum(1 for q in staged_qs if "✅" in check_question_health(q))
                 warn_count = len(staged_qs) - ok_count
+                untagged_count = sum(1 for q in staged_qs if q.get("tag_id") == "Chưa gắn mã")
+
                 st.success(
                     f"✅ Đang giữ trong bộ nhớ tạm **{len(staged_qs)} câu hỏi** — "
-                    f"🟢 Hiển thị tốt: **{ok_count} câu** | 🟠 Cần lưu ý: **{warn_count} câu**."
+                    f"🟢 Hiển thị tốt: **{ok_count} câu** | 🟠 Cảnh báo hiển thị: **{warn_count} câu** | "
+                    f"🏷️ Chưa gắn mã ID: **{untagged_count} câu**."
                 )
 
-                st.markdown("##### ⚡ Bảng sửa nhanh Mã ID & Tích chọn xóa câu không ổn:")
+                st.markdown("##### ⚡ Bảng sửa nhanh Mã ID & Tích chọn xóa câu hỏi:")
                 edit_rows = []
                 for idx, q in enumerate(staged_qs):
                     edit_rows.append({
                         "Xóa": False,
                         "STT": idx + 1,
-                        "Mã ID (Sửa trực tiếp)": q.get("tag_id", ""),
+                        "Mã ID (Gõ để tự gán/sửa)": q.get("tag_id", ""),
                         "Trạng thái": check_question_health(q),
                         "Dạng thức": PART_LABELS.get(q.get("part", 1), ""),
-                        "Bài học": q.get("lesson_name", ""),
-                        "Mức độ": q.get("level_name", "")
+                        "Khối": q.get("grade", "") if q.get("tag_id") != "Chưa gắn mã" else "-",
+                        "Bài học": q.get("lesson_name", "") if q.get("tag_id") != "Chưa gắn mã" else "⚠️ Chưa xác định (Cần gán ID hoặc xóa)",
+                        "Mức độ": q.get("level_name", "") if q.get("tag_id") != "Chưa gắn mã" else "-"
                     })
                 edited_df = st.data_editor(
                     pd.DataFrame(edit_rows),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["STT", "Trạng thái", "Dạng thức", "Bài học", "Mức độ"],
+                    disabled=["STT", "Trạng thái", "Dạng thức", "Khối", "Bài học", "Mức độ"],
                     key="staged_table_editor"
                 )
 
-                if st.button("🛠️ Áp dụng sửa Mã ID & Xóa các dòng đã tích chọn"):
+                btn_col1, btn_col2 = st.columns(2)
+                if btn_col1.button("🛠️ Áp dụng gán/sửa Mã ID & Xóa các dòng đã tích chọn", use_container_width=True):
                     new_staged = []
                     for idx, row in edited_df.iterrows():
                         if not row["Xóa"]:
                             q_obj = staged_qs[idx]
-                            new_id_str = str(row["Mã ID (Sửa trực tiếp)"]).strip()
+                            new_id_str = str(row["Mã ID (Gõ để tự gán/sửa)"]).strip()
                             if new_id_str != q_obj.get("tag_id"):
                                 meta = decode_kntt_tag(new_id_str)
                                 if meta:
@@ -818,19 +859,33 @@ if st.session_state.role == "teacher":
                     st.toast("✅ Đã cập nhật danh sách câu hỏi tạm!")
                     st.rerun()
 
-                with st.expander("👁️ Xem chi tiết, Sửa nội dung hoặc Xóa nhanh từng câu hỏi trước khi lưu", expanded=(warn_count > 0)):
+                if untagged_count > 0:
+                    if btn_col2.button(f"🗑️ Xóa nhanh toàn bộ {untagged_count} câu chưa có mã ID", use_container_width=True):
+                        st.session_state["staged_bank_qs"] = [q for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
+                        st.toast(f"Đã loại bỏ {untagged_count} câu thiếu mã ID!")
+                        st.rerun()
+
+                with st.expander("👁️ Xem chi tiết, Sửa nội dung hoặc Xóa nhanh từng câu hỏi trước khi lưu", expanded=(warn_count > 0 or untagged_count > 0)):
                     flt_mode = st.radio(
                         "Chế độ lọc câu hỏi xem trước:",
-                        ["Xem tất cả câu hỏi", "⚠️ Chỉ xem các câu có cảnh báo (Lỗi TikZ / Trống lời giải)"],
+                        [
+                            "Xem tất cả câu hỏi",
+                            "🏷️ Chỉ xem các câu CHƯA CÓ MÃ ID",
+                            "⚠️ Chỉ xem các câu có cảnh báo (Lỗi TikZ / Trống lời giải)"
+                        ],
                         horizontal=True,
                         key="pre_flt"
                     )
-                    filtered_pre_qs = [
-                        (i, q) for i, q in enumerate(staged_qs)
-                        if (flt_mode == "Xem tất cả câu hỏi" or "✅" not in check_question_health(q))
-                    ]
+                    filtered_pre_qs = []
+                    for i, q in enumerate(staged_qs):
+                        if flt_mode.startswith("🏷️") and q.get("tag_id") != "Chưa gắn mã":
+                            continue
+                        if flt_mode.startswith("⚠️") and "✅" in check_question_health(q):
+                            continue
+                        filtered_pre_qs.append((i, q))
+
                     if not filtered_pre_qs:
-                        st.info("🎉 Không có câu hỏi nào gặp cảnh báo lỗi hiển thị hoặc thiếu lời giải.")
+                        st.info("🎉 Không có câu hỏi nào nằm trong bộ lọc này.")
                     else:
                         page_size = 10
                         total_pages = max(1, (len(filtered_pre_qs) + page_size - 1) // page_size)
@@ -848,8 +903,8 @@ if st.session_state.role == "teacher":
                                     staged_qs.pop(orig_idx)
                                     st.session_state["staged_bank_qs"] = staged_qs
                                     st.rerun()
-                            with st.expander(f"✏️ Sửa nhanh Mã ID / Nội dung Câu {orig_idx + 1}"):
-                                u_tag = st.text_input("Mã ID (VD: 10-C1-B1-N)", value=q_item.get("tag_id", ""), key=f"st_tag_{orig_idx}")
+                            with st.expander(f"✏️ Tự gán Mã ID / Sửa nội dung Câu {orig_idx + 1}"):
+                                u_tag = st.text_input("Nhập Mã ID chuẩn (VD: 10-C1-B1-N)", value=q_item.get("tag_id", ""), key=f"st_tag_{orig_idx}")
                                 u_stem = st.text_area("Nội dung đề bài (Markdown / LaTeX)", value=q_item.get("stem", ""), height=100, key=f"st_stem_{orig_idx}")
                                 u_sa = None
                                 if q_item.get("part") == 3:
@@ -862,46 +917,49 @@ if st.session_state.role == "teacher":
                                     st.rerun()
                             st.divider()
 
-                if st.button("📥 Lưu toàn bộ danh sách này vào Ngân hàng câu hỏi", type="primary"):
-                    unique_records_map = {}
-                    for q in staged_qs:
-                        full_content_str = (
-                            q["stem"]
-                            + str(q.get("options", ""))
-                            + str(q.get("statements", ""))
-                            + str(q.get("short_ans", ""))
-                        )
-                        q_hash = hashlib.md5(full_content_str.encode("utf-8")).hexdigest()
-                        q["question_hash"] = q_hash
+                if st.button("📥 Lưu các câu hỏi hợp lệ vào Ngân hàng", type="primary"):
+                    valid_qs = [q for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
+                    skipped_untagged = len(staged_qs) - len(valid_qs)
+                    if not valid_qs:
+                        st.error("⚠️ Không có câu hỏi nào có mã ID hợp lệ để lưu! Vui lòng gán mã ID trước khi lưu.")
+                    else:
+                        unique_records_map = {}
+                        for q in valid_qs:
+                            full_content_str = (
+                                q["stem"]
+                                + str(q.get("options", ""))
+                                + str(q.get("statements", ""))
+                                + str(q.get("short_ans", ""))
+                            )
+                            q_hash = hashlib.md5(full_content_str.encode("utf-8")).hexdigest()
+                            q["question_hash"] = q_hash
 
-                        unique_records_map[q_hash] = {
-                            "tag_id": q["tag_id"],
-                            "grade": str(q["grade"]),
-                            "chapter_code": q["chapter_code"],
-                            "chapter_name": q["chapter_name"],
-                            "lesson_code": q["lesson_code"],
-                            "lesson_name": q["lesson_name"],
-                            "level_code": q["level_code"],
-                            "level_name": q["level_name"],
-                            "part": int(q["part"]),
-                            "question_data": q,
-                            "raw_tex": q.get("raw_tex", ""),
-                            "question_hash": q_hash
-                        }
+                            unique_records_map[q_hash] = {
+                                "tag_id": q["tag_id"],
+                                "grade": str(q["grade"]),
+                                "chapter_code": q["chapter_code"],
+                                "chapter_name": q["chapter_name"],
+                                "lesson_code": q["lesson_code"],
+                                "lesson_name": q["lesson_name"],
+                                "level_code": q["level_code"],
+                                "level_name": q["level_name"],
+                                "part": int(q["part"]),
+                                "question_data": q,
+                                "raw_tex": q.get("raw_tex", ""),
+                                "question_hash": q_hash
+                            }
 
-                    db_records = list(unique_records_map.values())
-                    try:
-                        for i in range(0, len(db_records), 50):
-                            batch = db_records[i:i + 50]
-                            supabase.table("question_bank").upsert(batch, on_conflict="question_hash").execute()
-                        st.success(
-                            f"🎉 Đã nạp thành công {len(db_records)} câu hỏi duy nhất "
-                            f"(đã lọc bỏ {len(staged_qs) - len(db_records)} câu trùng lặp) vào Ngân hàng!"
-                        )
-                    except Exception as e:
-                        st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
-
-        st.divider()
+                        db_records = list(unique_records_map.values())
+                        try:
+                            for i in range(0, len(db_records), 50):
+                                batch = db_records[i:i + 50]
+                                supabase.table("question_bank").upsert(batch, on_conflict="question_hash").execute()
+                            msg = f"🎉 Đã nạp thành công {len(db_records)} câu hỏi có ID chuẩn vào Ngân hàng!"
+                            if skipped_untagged > 0:
+                                msg += f" (Đã tự động bỏ qua {skipped_untagged} câu chưa được gắn mã ID)."
+                            st.success(msg)
+                        except Exception as e:
+                            st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
         st.subheader("🔍 2. Duyệt, Kiểm tra hiển thị & Sửa/Xóa câu hỏi trong Ngân hàng")
 
         b_col1, b_col2, b_col3 = st.columns([1, 2, 2])
