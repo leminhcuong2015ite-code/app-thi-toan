@@ -8,28 +8,47 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V6.0 - Linebreaks, listEX/lisEX, displaystyle int & LaTeX Export"
+PARSER_VERSION = "V6.1 - tkz-tab BBT, unwrap scalebox/def/dotEX & filter includegraphics"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
-if not os.path.exists(_TKZ_TAB_PATH):
+
+
+def _has_system_tkz_tab():
+    r"""Kiểm tra xem gói texlive-pictures trên máy chủ đã cài sẵn tkz-tab.sty chưa"""
+    if not shutil.which("kpsewhich"):
+        return False
     try:
-        urllib.request.urlretrieve(
-            "https://mirrors.ctan.org/macros/latex/contrib/tkz/tkz-tab/latex/tkz-tab.sty",
-            _TKZ_TAB_PATH
-        )
+        res = subprocess.run(["kpsewhich", "tkz-tab.sty"], capture_output=True, text=True, timeout=5)
+        return bool(res.stdout and res.stdout.strip())
     except Exception:
-        pass
+        return False
+
+
+_SYSTEM_HAS_TKZ_TAB = _has_system_tkz_tab()
+
+if not _SYSTEM_HAS_TKZ_TAB and not os.path.exists(_TKZ_TAB_PATH):
+    for _tkz_url in (
+        "https://mirrors.ctan.org/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+        "https://ctan.math.washington.edu/tex-archive/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+        "https://mirrors.mit.edu/CTAN/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+    ):
+        try:
+            urllib.request.urlretrieve(_tkz_url, _TKZ_TAB_PATH)
+            if os.path.exists(_TKZ_TAB_PATH) and os.path.getsize(_TKZ_TAB_PATH) > 1000:
+                break
+        except Exception:
+            pass
 
 
 def extract_braced_args(text, start_pos, num_args):
-    r"""Tách chính xác các cặp ngoặc nhọn {...} có lồng nhau trong LaTeX"""
+    r"""Tách chính xác các cặp ngoặc nhọn {...} có lồng nhau trong LaTeX (bỏ qua mọi tham số [...] và comment %)"""
     args = []
     pos = start_pos
     n = len(text)
     for _ in range(num_args):
         while pos < n and text[pos].isspace():
             pos += 1
-        if pos < n and text[pos] == '[':
+        while pos < n and text[pos] == '[':
             bracket_depth = 0
             while pos < n:
                 if text[pos] == '[':
@@ -52,8 +71,12 @@ def extract_braced_args(text, start_pos, num_args):
         depth = 0
         arg_start = pos + 1
         while pos < n:
-            if text[pos] == '\\':
+            if text[pos] == '\\' and pos + 1 < n and text[pos + 1] in ('{', '}', '\\', '%'):
                 pos += 2
+                continue
+            if text[pos] == '%':
+                nl = text.find('\n', pos)
+                pos = nl + 1 if nl != -1 else n
                 continue
             if text[pos] == '{':
                 depth += 1
@@ -67,8 +90,116 @@ def extract_braced_args(text, start_pos, num_args):
     return args, pos
 
 
+def strip_tex_definitions(text):
+    r"""Xóa triệt để các lệnh định nghĩa macro cục bộ như \def\dotEX{}, \newcommand, \renewcommand, \setlength, \dotEX"""
+    if not text:
+        return ""
+
+    # 1. Xóa \def, \gdef, \edef, \xdef kèm thân {...} (ví dụ: \def\dotEX{}, \def\boxEX{...})
+    def_pat = re.compile(r'\\(?:g|e|x)?def\s*\\[a-zA-Z@]+(?:#\d)*\s*')
+    pos = 0
+    while True:
+        m = def_pat.search(text, pos)
+        if not m:
+            break
+        end_m = m.end()
+        if end_m < len(text) and text[end_m] == '{':
+            args, after_pos = extract_braced_args(text, end_m, 1)
+            if args and after_pos > end_m:
+                text = text[:m.start()] + text[after_pos:]
+                pos = m.start()
+                continue
+        pos = m.end()
+
+    # 2. Xóa \newcommand, \renewcommand, \providecommand, \setlength, \addtolength
+    cmd_pat = re.compile(r'\\(?:renewcommand|newcommand|providecommand|setlength|addtolength)\*?\s*')
+    pos = 0
+    while True:
+        m = cmd_pat.search(text, pos)
+        if not m:
+            break
+        cur = m.end()
+        n = len(text)
+        while cur < n and text[cur].isspace():
+            cur += 1
+        if cur < n and text[cur] == '{':
+            _, cur = extract_braced_args(text, cur, 1)
+        elif cur < n and text[cur] == '\\':
+            m_cs = re.match(r'\\[a-zA-Z@]+', text[cur:])
+            if m_cs:
+                cur += m_cs.end()
+        while cur < n and (text[cur].isspace() or text[cur] == '['):
+            if text[cur] == '[':
+                b_depth = 0
+                while cur < n:
+                    if text[cur] == '[':
+                        b_depth += 1
+                    elif text[cur] == ']':
+                        b_depth -= 1
+                        if b_depth == 0:
+                            cur += 1
+                            break
+                    cur += 1
+            else:
+                cur += 1
+        if cur < n and text[cur] == '{':
+            _, after_pos = extract_braced_args(text, cur, 1)
+            if after_pos > cur:
+                text = text[:m.start()] + text[after_pos:]
+                pos = m.start()
+                continue
+        pos = m.end()
+
+    # 3. Xóa \let\cmdA=\cmdB và các lệnh gọi macro rỗng như \dotEX, \loigiaiEX, \boxEX
+    text = re.sub(r'\\let\s*\\[a-zA-Z@]+\s*=?\s*\\[a-zA-Z@]+', '', text)
+    text = re.sub(r'\\(dotEX|loigiaiEX|boxEX|choiceEX)\b\s*(\{\s*\})?', '', text)
+    return text
+
+
+def unwrap_macro_keep_last_arg(text, macro_name, num_args):
+    r"""Bóc tách các lệnh đóng hộp như \scalebox{0.8}{nội dung}, \resizebox{w}{h}{nội dung} để giữ lại phần nội dung bên trong"""
+    pattern = re.compile(r'\\' + macro_name + r'\*?(?![a-zA-Z])')
+    search_pos = 0
+    while True:
+        m = pattern.search(text, search_pos)
+        if not m:
+            break
+        args, end_pos = extract_braced_args(text, m.end(), num_args)
+        if len(args) < num_args:
+            search_pos = m.end()
+            continue
+        inner_content = args[-1]
+        text = text[:m.start()] + inner_content + text[end_pos:]
+        search_pos = m.start()
+    return text
+
+
+def unwrap_all_box_wrappers(text):
+    r"""Bóc tách toàn bộ các lệnh co giãn/đóng khung bao quanh hình TikZ hoặc công thức"""
+    if not text:
+        return ""
+    for _ in range(3):
+        text = unwrap_macro_keep_last_arg(text, 'scalebox', 2)
+        text = unwrap_macro_keep_last_arg(text, 'resizebox', 3)
+        text = unwrap_macro_keep_last_arg(text, 'adjustbox', 2)
+        text = unwrap_macro_keep_last_arg(text, 'parbox', 2)
+        text = unwrap_macro_keep_last_arg(text, 'raisebox', 2)
+        text = unwrap_macro_keep_last_arg(text, 'centerline', 1)
+        text = unwrap_macro_keep_last_arg(text, 'mbox', 1)
+        text = unwrap_macro_keep_last_arg(text, 'hbox', 1)
+        text = unwrap_macro_keep_last_arg(text, 'vbox', 1)
+        text = unwrap_macro_keep_last_arg(text, 'vtop', 1)
+        text = unwrap_macro_keep_last_arg(text, 'makebox', 1)
+        text = unwrap_macro_keep_last_arg(text, 'framebox', 1)
+    # Trường hợp còn sót \scalebox{0.8}{} rỗng hoặc \scalebox{0.8} đơn lẻ
+    text = re.sub(r'\\scalebox\s*\{[^}]*\}(?:\s*\[[^\]]*\])?\s*\{\s*\}', '', text)
+    text = re.sub(r'\\begin\{minipage\}(?:\s*\[[^\]]*\])*\s*\{[^}]*\}', '', text)
+    text = re.sub(r'\\end\{minipage\}', '', text)
+    return text
+
+
 def compile_latex_snippet_to_svg(latex_snippet):
-    r"""Biên dịch TikZ bằng pdflatex + tự động co khổ giấy PDF vừa khít hình vẽ + pdf2svg"""
+    r"""Biên dịch TikZ / Bảng biến thiên tkz-tab bằng pdflatex + tự động co khổ giấy PDF vừa khít hình vẽ + pdf2svg"""
     if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
@@ -80,16 +211,23 @@ def compile_latex_snippet_to_svg(latex_snippet):
     snippet_fixed = re.sub(r'\\lq\b\s*', '`', snippet_fixed)
     snippet_fixed = re.sub(r'\\rq\b\s*', "'", snippet_fixed)
 
-    extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed and os.path.exists(_TKZ_TAB_PATH)) else ""
+    # Luôn nạp gói tkz-tab khi có lệnh bảng biến thiên / bảng xét dấu (\tkzTabInit, \tkzTabLine, \tkzTabVar, \tkzTab)
+    extra_pkgs = []
+    if "tkzTab" in snippet_fixed or "tkz-tab" in snippet_fixed:
+        extra_pkgs.append(r"\usepackage{tkz-tab}")
+    if re.search(r'\\tkz(?!Tab|DrawXY)[A-Z]', snippet_fixed):
+        extra_pkgs.append(r"\usepackage{tkz-euclide}")
+    extra_pkg = "\n".join(extra_pkgs)
 
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
         r"\usepackage{amsmath,amssymb,amsfonts,xcolor,graphicx}" + "\n"
         r"\usepackage{tikz}" + "\n"
-        + extra_pkg + "\n"
         r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit}" + "\n"
-        r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
+        + (extra_pkg + "\n" if extra_pkg else "")
+        + r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
+        r"\providecommand{\dotEX}{}" + "\n"
         r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\providecommand{\wideparen}[1]{\widehat{#1}}" + "\n"
@@ -122,7 +260,7 @@ def compile_latex_snippet_to_svg(latex_snippet):
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        if os.path.exists(_TKZ_TAB_PATH):
+        if not _SYSTEM_HAS_TKZ_TAB and os.path.exists(_TKZ_TAB_PATH):
             shutil.copy(_TKZ_TAB_PATH, os.path.join(tmpdir, "tkz-tab.sty"))
 
         tex_file = os.path.join(tmpdir, "fig.tex")
@@ -240,6 +378,8 @@ def ensure_displaystyle_int(math_str):
 
 def normalize_math_internals(math_str):
     r"""Chuẩn hóa mọi ký hiệu toán bên trong $...$ hoặc $$...$$ sang chuẩn MathJax"""
+    math_str = strip_tex_definitions(math_str)
+    math_str = unwrap_all_box_wrappers(math_str)
     math_str = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', math_str)
     math_str = re.sub(r'\\(boldmath|unboldmath)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
@@ -285,6 +425,11 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
+    # Xóa các định nghĩa macro cục bộ (\def\dotEX{}, \renewcommand, ...) và bóc tách \scalebox{0.8}{...}, \resizebox
+    text = strip_tex_definitions(text)
+    text = unwrap_immini(text)
+    text = unwrap_all_box_wrappers(text)
+
     # Loại bỏ ngay \allowdisplaybreaks (kể cả có tham số [1]..[4]) và các lệnh cấu hình đặt ngoài công thức toán
     text = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', text)
     text = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', text)
@@ -298,13 +443,11 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", text)
     text = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", text)
 
-    text = unwrap_immini(text)
     text = unwrap_textcolor(text)
-    text = re.sub(r'\\color\s*\{[^}]*\}', '', text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
     visual_pattern = re.compile(
-        r'\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
+        r'(?:\\tikzset\s*\{[^}]*\}\s*)*\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
         re.DOTALL
     )
     visual_placeholders = {}
@@ -316,6 +459,25 @@ def clean_latex_to_markdown(text):
         return key
 
     text = visual_pattern.sub(_visual_repl, text)
+
+    # Sau khi đã tách tikzpicture, bóc tiếp nếu còn \scalebox bao quanh placeholder và xóa \color, \tikzset ngoài hình
+    text = unwrap_all_box_wrappers(text)
+    text = strip_tex_definitions(text)
+    text = re.sub(r'\\color\s*\{[^}]*\}', '', text)
+
+    # Xóa \tikzset{...} còn sót bên ngoài tikzpicture
+    tikzset_pat = re.compile(r'\\tikzset\b')
+    pos = 0
+    while True:
+        m = tikzset_pat.search(text, pos)
+        if not m:
+            break
+        _, after_pos = extract_braced_args(text, m.end(), 1)
+        if after_pos > m.end():
+            text = text[:m.start()] + text[after_pos:]
+            pos = m.start()
+        else:
+            pos = m.end()
 
     text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
     text = re.sub(
@@ -441,6 +603,15 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
 
     ex_body = re.sub(r'(?<!\\)%.*', '', block_body_with_comments)
 
+    # Phát hiện sớm câu hỏi có lệnh chèn file ảnh ngoài \includegraphics{...}
+    inc_paths = re.findall(r'\\includegraphics(?![a-zA-Z])\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}', ex_body)
+    has_ext_img = bool(inc_paths or re.search(r'\\includegraphics(?![a-zA-Z])', ex_body))
+
+    # Xóa các định nghĩa \def\dotEX{} và bóc \immini, \scalebox ngay trên ex_body
+    ex_body = strip_tex_definitions(ex_body)
+    ex_body = unwrap_immini(ex_body)
+    ex_body = unwrap_all_box_wrappers(ex_body)
+
     loigiai_raw = ""
     lg_match = re.search(r'\\loi?giai\s*(?:\[.*?\])?\s*\{', ex_body)
     if lg_match:
@@ -450,78 +621,91 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
-    # Bóc tách \immini ngay trên ex_body TRƯỚC KHI tìm \choice, \choiceTF, \shortans
+    # Bóc lại \immini và \scalebox một lần nữa nếu nằm bên ngoài/sau khi tách lời giải
     ex_body = unwrap_immini(ex_body)
+    ex_body = unwrap_all_box_wrappers(ex_body)
 
-    parsed_q = None
-
-    tf_match = re.search(r'\\choiceTF(?:t|n)?(?![a-zA-Z])', ex_body)
-    mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
-    sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
-
-    if tf_match:
-        opts_raw, opts_end = extract_braced_args(ex_body, tf_match.end(), 4)
-        stem_raw = ex_body[:tf_match.start()] + "\n\n" + ex_body[opts_end:]
-        statements = []
-        for idx, opt in enumerate(opts_raw):
-            is_true = bool(re.search(r'\\True\b', opt))
-            clean_opt = re.sub(r'\\True\b', '', opt).strip()
-            statements.append({
-                "id": idx,
-                "text": clean_latex_to_markdown(clean_opt),
-                "is_true": is_true
-            })
-        parsed_q = {
-            "id": f"q_{index}",
-            "part": 2,
-            "stem": clean_latex_to_markdown(stem_raw),
-            "statements": statements,
-            "solution": clean_latex_to_markdown(loigiai_raw)
-        }
-
-    elif mc_match:
-        opts_raw, opts_end = extract_braced_args(ex_body, mc_match.end(), 4)
-        stem_raw = ex_body[:mc_match.start()] + "\n\n" + ex_body[opts_end:]
-        options = []
-        for idx, opt in enumerate(opts_raw):
-            is_true = bool(re.search(r'\\True\b', opt))
-            clean_opt = re.sub(r'\\True\b', '', opt).strip()
-            options.append({
-                "id": idx,
-                "text": clean_latex_to_markdown(clean_opt),
-                "is_true": is_true
-            })
+    if has_ext_img:
+        # Không biên dịch TikZ cho các câu chứa \includegraphics để tiết kiệm thời gian và báo lỗi loại bỏ ngay
         parsed_q = {
             "id": f"q_{index}",
             "part": 1,
-            "stem": clean_latex_to_markdown(stem_raw),
-            "options": options,
-            "solution": clean_latex_to_markdown(loigiai_raw)
+            "stem": "",
+            "options": [],
+            "solution": "",
+            "has_external_image": True,
+            "external_images": inc_paths if inc_paths else ["file ảnh ngoài"]
         }
-
-    elif sa_match:
-        brace_pos = ex_body.find('{', sa_match.start())
-        sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
-        ans_raw = sa_args[0] if sa_args else ""
-        ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
-        stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
-        parsed_q = {
-            "id": f"q_{index}",
-            "part": 3,
-            "stem": clean_latex_to_markdown(stem_raw),
-            "short_ans": ans_clean,
-            "solution": clean_latex_to_markdown(loigiai_raw)
-        }
-
     else:
-        stem_clean = clean_latex_to_markdown(ex_body)
-        if stem_clean:
+        parsed_q = None
+
+        tf_match = re.search(r'\\choiceTF(?:t|n)?(?![a-zA-Z])', ex_body)
+        mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
+        sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
+
+        if tf_match:
+            opts_raw, opts_end = extract_braced_args(ex_body, tf_match.end(), 4)
+            stem_raw = ex_body[:tf_match.start()] + "\n\n" + ex_body[opts_end:]
+            statements = []
+            for idx, opt in enumerate(opts_raw):
+                is_true = bool(re.search(r'\\True\b', opt))
+                clean_opt = re.sub(r'\\True\b', '', opt).strip()
+                statements.append({
+                    "id": idx,
+                    "text": clean_latex_to_markdown(clean_opt),
+                    "is_true": is_true
+                })
             parsed_q = {
                 "id": f"q_{index}",
-                "part": 4,
-                "stem": stem_clean,
+                "part": 2,
+                "stem": clean_latex_to_markdown(stem_raw),
+                "statements": statements,
                 "solution": clean_latex_to_markdown(loigiai_raw)
             }
+
+        elif mc_match:
+            opts_raw, opts_end = extract_braced_args(ex_body, mc_match.end(), 4)
+            stem_raw = ex_body[:mc_match.start()] + "\n\n" + ex_body[opts_end:]
+            options = []
+            for idx, opt in enumerate(opts_raw):
+                is_true = bool(re.search(r'\\True\b', opt))
+                clean_opt = re.sub(r'\\True\b', '', opt).strip()
+                options.append({
+                    "id": idx,
+                    "text": clean_latex_to_markdown(clean_opt),
+                    "is_true": is_true
+                })
+            parsed_q = {
+                "id": f"q_{index}",
+                "part": 1,
+                "stem": clean_latex_to_markdown(stem_raw),
+                "options": options,
+                "solution": clean_latex_to_markdown(loigiai_raw)
+            }
+
+        elif sa_match:
+            brace_pos = ex_body.find('{', sa_match.start())
+            sa_args, sa_end = extract_braced_args(ex_body, brace_pos, 1)
+            ans_raw = sa_args[0] if sa_args else ""
+            ans_clean = ans_raw.replace('$', '').replace('{,}', ',').replace('.', ',').strip()
+            stem_raw = ex_body[:sa_match.start()] + ex_body[sa_end:]
+            parsed_q = {
+                "id": f"q_{index}",
+                "part": 3,
+                "stem": clean_latex_to_markdown(stem_raw),
+                "short_ans": ans_clean,
+                "solution": clean_latex_to_markdown(loigiai_raw)
+            }
+
+        else:
+            stem_clean = clean_latex_to_markdown(ex_body)
+            if stem_clean:
+                parsed_q = {
+                    "id": f"q_{index}",
+                    "part": 4,
+                    "stem": stem_clean,
+                    "solution": clean_latex_to_markdown(loigiai_raw)
+                }
 
     if parsed_q:
         parsed_q["_parser_ver"] = PARSER_VERSION

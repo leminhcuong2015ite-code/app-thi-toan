@@ -22,7 +22,7 @@ import latex_parser
 importlib.reload(kntt_mapping)
 importlib.reload(latex_parser)
 
-from latex_parser import parse_exam_tex, clean_latex_to_markdown, ensure_displaystyle_int, PARSER_VERSION
+from latex_parser import parse_exam_tex, clean_latex_to_markdown, ensure_displaystyle_int, strip_tex_definitions, unwrap_all_box_wrappers, PARSER_VERSION
 from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
 
 st.set_page_config(page_title="Hệ thống Kiểm tra Đánh giá Môn Toán - Thầy Lê Minh Cường", layout="wide", page_icon="📐")
@@ -137,22 +137,26 @@ button[data-baseweb="tab"][aria-selected="true"] span {
     font-weight: 500 !important;
 }
 
-.opt-box-true, .opt-box-true p, .opt-box-true span,
-.opt-box-false, .opt-box-false p, .opt-box-false span,
+/* KHÔNG ép font-size lên thẻ span bên trong phương án để giữ nguyên tỷ lệ chuẩn của số mũ/lũy thừa/phân số trong KaTeX giống hệt đề bài và lời giải */
+.opt-box-true, .opt-box-true p,
+.opt-box-false, .opt-box-false p,
 .solution-box, .solution-box p, .solution-box li,
 div[role="radiogroup"] label,
 div[role="radiogroup"] label p,
-div[role="radiogroup"] label span,
 div[role="radiogroup"] div[data-testid="stMarkdownContainer"] p {
     font-size: 18px !important;
     line-height: 1.65 !important;
+    font-weight: 400 !important;
 }
 
 .katex {
     font-size: 1.02em !important;
+    line-height: 1.2 !important;
+    font-weight: 400 !important;
 }
 mjx-container {
     font-size: 102% !important;
+    line-height: 1.2 !important;
 }
 
 .app-header-banner {
@@ -288,7 +292,7 @@ div[role="radiogroup"] > label:hover {
     padding: 12px 16px;
     margin-bottom: 8px;
     color: #065f46 !important;
-    font-weight: 600;
+    font-weight: 400;
 }
 .opt-box-false {
     background-color: #f8fafc !important;
@@ -673,10 +677,27 @@ def read_student_file_safe(uploaded_file):
     return pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8", errors="replace")
 
 # ================= HÀM LÀM SẠCH LỆNH LATEX, XUỐNG DÒNG & KIỂM TRA TRẠNG THÁI =================
+def has_external_includegraphics(q):
+    """Kiểm tra câu hỏi có chứa lệnh chèn file ảnh ngoài \includegraphics{...} không"""
+    if not q:
+        return False, []
+    if q.get("has_external_image"):
+        return True, q.get("external_images") or ["file ảnh ngoài"]
+    raw_no_comment = re.sub(r'(?<!\\)%.*', '', q.get("raw_tex", ""))
+    combined_check = raw_no_comment + "\n" + q.get("stem", "") + "\n" + q.get("solution", "")
+    paths = re.findall(r'\\includegraphics(?![a-zA-Z])\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}', combined_check)
+    if paths or re.search(r'\\includegraphics(?![a-zA-Z])', combined_check):
+        q["has_external_image"] = True
+        q["external_images"] = paths if paths else ["file ảnh ngoài"]
+        return True, q["external_images"]
+    return False, []
+
 def clean_leftover_spaces(txt):
-    """Làm sạch các lệnh \allowdisplaybreaks, listEX/lisEX, xuống dòng \\, \displaystyle\int và khoảng trắng LaTeX"""
+    """Làm sạch các lệnh \scalebox, \def\dotEX{}, \allowdisplaybreaks, listEX/lisEX, xuống dòng \\, \displaystyle\int và khoảng trắng LaTeX"""
     if not txt:
         return ""
+    txt = strip_tex_definitions(txt)
+    txt = unwrap_all_box_wrappers(txt)
     txt = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', txt)
     txt = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', txt)
     txt = re.sub(
@@ -692,7 +713,7 @@ def clean_leftover_spaces(txt):
         flags=re.IGNORECASE
     )
     txt = re.sub(r'\\(?:item|task)\b(\s*\[[^\]]*\])?\s*', '<br>• ', txt)
-    txt = re.sub(r'(?<!\$)\\(boldmath|unboldmath|noindent|indent|centering|leavevmode|vfill|hfill|smallskip|medskip|bigskip)\b', '', txt)
+    txt = re.sub(r'(?<!\$)\\(boldmath|unboldmath|noindent|indent|centering|leavevmode|vfill|hfill|smallskip|medskip|bigskip|dotEX|loigiaiEX|boxEX)\b', '', txt)
     txt = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', txt)
     txt = re.sub(r'\s*\\rq\s*\\rq\\\s+', '" ', txt)
     txt = re.sub(r'\s*\\rq\s*\\rq', '"', txt)
@@ -703,7 +724,8 @@ def clean_leftover_spaces(txt):
     saved_math = {}
     def _keep_math(m):
         k = f"@@M_{len(saved_math)}@@"
-        saved_math[k] = ensure_displaystyle_int(m.group(0))
+        inner_m = unwrap_all_box_wrappers(strip_tex_definitions(m.group(0)))
+        saved_math[k] = ensure_displaystyle_int(inner_m)
         return k
 
     txt = re.sub(r'\$\$.*?\$\$|\$(?!\$).*?\$', _keep_math, txt, flags=re.DOTALL)
@@ -717,31 +739,52 @@ def clean_leftover_spaces(txt):
     return txt.strip()
 
 def sanitize_question_obj(q):
-    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (tự động biên dịch lại nếu câu cũ bị sót lệnh)"""
+    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (tự động biên dịch lại nếu câu cũ bị lỗi BBT tkz-tab hoặc sót lệnh)"""
     if not q:
         return q
     if "_uid" not in q:
         q["_uid"] = str(uuid.uuid4())[:8]
 
+    has_external_includegraphics(q)
     raw_tex = q.get("raw_tex", "")
     full_curr = q.get("stem", "") + " " + q.get("solution", "")
-    needs_reparse = (
-        r"\immini" in full_curr
+
+    has_broken_tikz_or_cmd = (
+        "Lỗi TikZ:" in full_curr
+        or "Lỗi hệ thống TikZ:" in full_curr
+        or "Lỗi biên dịch" in full_curr
+        or ("tkzTab" in raw_tex and "<img" not in full_curr)
+        or r"\immini" in full_curr
         or "listEX" in full_curr
         or "lisEX" in full_curr
-        or (raw_tex and q.get("_parser_ver") != PARSER_VERSION and not q.get("_manually_edited") and "tikzpicture" not in raw_tex and "tabvar" not in raw_tex)
+        or r"\scalebox" in full_curr
+        or r"\resizebox" in full_curr
+        or r"\def" in full_curr
+        or r"\dotEX" in full_curr
     )
-    if needs_reparse and raw_tex:
+    needs_reparse = (
+        not q.get("has_external_image")
+        and (
+            has_broken_tikz_or_cmd
+            or (raw_tex and q.get("_parser_ver") != PARSER_VERSION and not q.get("_manually_edited") and "tikzpicture" not in raw_tex and "tabvar" not in raw_tex)
+        )
+    )
+    if needs_reparse and raw_tex and q.get("_reparse_attempted_ver") != PARSER_VERSION:
+        q["_reparse_attempted_ver"] = PARSER_VERSION
         try:
             reparsed_list = parse_exam_tex(raw_tex)
             if reparsed_list:
                 rp = reparsed_list[0]
-                q["stem"] = rp.get("stem", q["stem"])
-                q["solution"] = rp.get("solution", q.get("solution", ""))
-                if "options" in rp and not q.get("_manually_edited"):
-                    q["options"] = rp["options"]
-                if "statements" in rp and not q.get("_manually_edited"):
-                    q["statements"] = rp["statements"]
+                if rp.get("has_external_image"):
+                    q["has_external_image"] = True
+                    q["external_images"] = rp.get("external_images", ["file ảnh ngoài"])
+                else:
+                    q["stem"] = rp.get("stem", q["stem"])
+                    q["solution"] = rp.get("solution", q.get("solution", ""))
+                    if "options" in rp and not q.get("_manually_edited"):
+                        q["options"] = rp["options"]
+                    if "statements" in rp and not q.get("_manually_edited"):
+                        q["statements"] = rp["statements"]
                 q["_parser_ver"] = PARSER_VERSION
         except Exception:
             pass
@@ -757,7 +800,7 @@ def sanitize_question_obj(q):
     return q
 
 def check_question_health(q):
-    """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh ex_test không"""
+    """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ, \includegraphics hay sót lệnh ex_test không"""
     sanitize_question_obj(q)
     issues = []
     full_rendered = q.get("stem", "") + " " + q.get("solution", "")
@@ -766,12 +809,17 @@ def check_question_health(q):
     elif q.get("part") == 2:
         full_rendered += " " + " ".join(s.get("text", "") for s in q.get("statements", []))
 
+    has_inc, inc_list = has_external_includegraphics(q)
+    if has_inc:
+        issues.append(f"❌ Chứa lệnh chèn ảnh ngoài (\\includegraphics{{{inc_list[0]}}})")
     if "Lỗi TikZ:" in full_rendered or "Lỗi hệ thống TikZ:" in full_rendered or "Lỗi biên dịch" in full_rendered:
         issues.append("❌ Lỗi hình TikZ")
     if not q.get("solution", "").strip():
         issues.append("⚠️ Trống lời giải")
-    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini|lq|rq|allowdisplaybreaks)\b', full_rendered):
+    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini|lq|rq|allowdisplaybreaks|scalebox|resizebox|dotEX|includegraphics)\b', full_rendered):
         issues.append("⚠️ Sót lệnh LaTeX")
+    elif re.search(r'\\(?:g|e|x)?def\s*\\', full_rendered):
+        issues.append("⚠️ Sót lệnh \\def")
     elif re.search(r'\\(begin|end)\{(?!(aligned|array|cases|matrix|pmatrix|bmatrix|vmatrix)\b)', full_rendered):
         issues.append("⚠️ Sót môi trường LaTeX")
 
@@ -1897,9 +1945,16 @@ if st.session_state.role == "teacher":
                     parsed_qs = parse_exam_tex(raw_bank_tex)
                     processed_qs = []
                     dropped_no_id = 0
+                    dropped_ext_img = []
 
                     for q in parsed_qs:
                         q["_uid"] = str(uuid.uuid4())[:8]
+                        has_inc, inc_paths = has_external_includegraphics(q)
+                        if has_inc:
+                            dropped_ext_img.append(
+                                f"**Câu {q.get('id', '?')}** (Mã ID: `{q.get('tag_id', 'Chưa gắn mã')}`) — Chứa lệnh chèn ảnh ngoài: `\\includegraphics{{{chr(44).join(inc_paths)}}}`"
+                            )
+                            continue
                         sanitize_question_obj(q)
                         if q.get("tag_id") == "Chưa gắn mã":
                             if missing_id_mode.startswith("🗑️"):
@@ -1915,12 +1970,20 @@ if st.session_state.role == "teacher":
                     clear_edit_widget_state()
                     st.session_state["staged_bank_qs"] = processed_qs
                     st.session_state["dropped_no_id_count"] = dropped_no_id
+                    st.session_state["dropped_ext_img_list"] = dropped_ext_img
                     st.session_state["staged_file_sig"] = file_sig
                     st.session_state["staged_ver"] = st.session_state.get("staged_ver", 0) + 1
 
             staged_qs = st.session_state.get("staged_bank_qs", [])
             dropped_cnt = st.session_state.get("dropped_no_id_count", 0)
+            dropped_img_list = st.session_state.get("dropped_ext_img_list", [])
             staged_ver = st.session_state.get("staged_ver", 0)
+
+            if dropped_img_list:
+                st.error(
+                    f"❌ **Đã phát hiện, báo lỗi và tự động loại bỏ {len(dropped_img_list)} câu hỏi chứa lệnh chèn file hình ngoài (`\\includegraphics`) không khả dụng trên web:**\n\n"
+                    + "\n".join(f"- {item}" for item in dropped_img_list)
+                )
 
             if dropped_cnt > 0:
                 st.warning(f"🗑️ Đã tự động loại bỏ **{dropped_cnt} câu hỏi** không có mã ID theo tùy chọn của bạn.")
@@ -2116,12 +2179,51 @@ if st.session_state.role == "teacher":
         if not bank_items:
             st.info("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này.")
         else:
+            for it in bank_items:
+                qd_ref = it.get("question_data") or {}
+                if it.get("raw_tex") and not qd_ref.get("raw_tex"):
+                    qd_ref["raw_tex"] = it["raw_tex"]
+
             ok_b = sum(1 for item in bank_items if "✅" in check_question_health(item["question_data"]))
             warn_b = len(bank_items) - ok_b
             st.write(
                 f"📊 **Hiện có `{len(bank_items)}` câu hỏi trong mục đang chọn** "
                 f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
             )
+
+            if st.button("🔧 Tự động biên dịch lại Bảng biến thiên / Xóa lệnh thừa (\scalebox, \def) & Loại bỏ câu chứa \includegraphics trong mục đang lọc", use_container_width=True):
+                fixed_cnt = 0
+                removed_inc_cnt = 0
+                with st.spinner("Đang quét, biên dịch lại bảng biến thiên tkz-tab và dọn câu chứa \includegraphics..."):
+                    for it in bank_items:
+                        qd_cur = it.get("question_data") or {}
+                        if it.get("raw_tex") and not qd_cur.get("raw_tex"):
+                            qd_cur["raw_tex"] = it["raw_tex"]
+                        has_inc, _ = has_external_includegraphics(qd_cur)
+                        if has_inc:
+                            supabase.table("question_bank").delete().eq("id", it["id"]).execute()
+                            removed_inc_cnt += 1
+                            continue
+                        raw_t = qd_cur.get("raw_tex", "")
+                        if raw_t and not qd_cur.get("_manually_edited"):
+                            rep_list = parse_exam_tex(raw_t)
+                            if rep_list:
+                                rp_q = rep_list[0]
+                                if rp_q.get("has_external_image"):
+                                    supabase.table("question_bank").delete().eq("id", it["id"]).execute()
+                                    removed_inc_cnt += 1
+                                    continue
+                                qd_cur["stem"] = clean_leftover_spaces(rp_q.get("stem", qd_cur.get("stem", "")))
+                                qd_cur["solution"] = clean_leftover_spaces(rp_q.get("solution", qd_cur.get("solution", "")))
+                                if "options" in rp_q:
+                                    qd_cur["options"] = rp_q["options"]
+                                if "statements" in rp_q:
+                                    qd_cur["statements"] = rp_q["statements"]
+                                qd_cur["_parser_ver"] = PARSER_VERSION
+                                supabase.table("question_bank").update({"question_data": qd_cur}).eq("id", it["id"]).execute()
+                                fixed_cnt += 1
+                st.success(f"✅ Đã cập nhật lại {fixed_cnt} câu hỏi và tự động loại bỏ {removed_inc_cnt} câu chứa \includegraphics!")
+                st.rerun()
 
             q_list_filtered_for_tex = []
             for it in bank_items:
@@ -2538,7 +2640,25 @@ if st.session_state.role == "teacher":
             if tex_file:
                 raw_tex = tex_file.read().decode("utf-8", errors="ignore")
                 with st.spinner("Đang phân tích cấu trúc LaTeX và biên dịch hình vẽ TikZ..."):
-                    parsed_questions = [sanitize_question_obj(q) for q in parse_exam_tex(raw_tex)]
+                    raw_parsed_list = parse_exam_tex(raw_tex)
+                    parsed_questions = []
+                    fast_dropped_imgs = []
+                    for q_raw in raw_parsed_list:
+                        has_inc, inc_paths = has_external_includegraphics(q_raw)
+                        if has_inc:
+                            fast_dropped_imgs.append(
+                                f"**Câu {q_raw.get('id', '?')}** (Mã ID: `{q_raw.get('tag_id', 'Chưa gắn mã')}`) — `\\includegraphics{{{chr(44).join(inc_paths)}}}`"
+                            )
+                            continue
+                        q_clean = sanitize_question_obj(q_raw)
+                        q_clean["id"] = f"q_{len(parsed_questions) + 1}"
+                        parsed_questions.append(q_clean)
+
+                if fast_dropped_imgs:
+                    st.error(
+                        f"❌ **Đã phát hiện và tự động loại bỏ {len(fast_dropped_imgs)} câu hỏi chứa lệnh chèn file ảnh ngoài (`\\includegraphics`):**\n\n"
+                        + "\n".join(f"- {item}" for item in fast_dropped_imgs)
+                    )
 
                 p1_cnt = sum(1 for q in parsed_questions if q["part"] == 1)
                 p2_cnt = sum(1 for q in parsed_questions if q["part"] == 2)
