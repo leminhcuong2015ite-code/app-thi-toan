@@ -27,7 +27,7 @@ from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
 
 st.set_page_config(page_title="Hệ thống Kiểm tra Đánh giá Môn Toán - Thầy Lê Minh Cường", layout="wide", page_icon="📐")
 
-# ================= CSS GIAO DIỆN HIỆN ĐẠI, ĐỒNG BỘ CỠ CHỮ VĂN BẢN & CÔNG THỨC TOÁN =================
+# ================= CSS GIAO DIỆN HIỆN ĐẠI, ĐỒNG BỘ CỠ CHỮ ĐỀ BÀI - PHƯƠNG ÁN - CÔNG THỨC TOÁN =================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
@@ -40,20 +40,26 @@ html, body, [class*="css"] {
     background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
-/* Cân bằng kích thước font chữ tiếng Việt và font công thức Toán KaTeX/MathJax */
-.q-content-area, .q-content-area p, .q-content-area li,
+/* Đồng bộ hoàn toàn cỡ chữ giữa Đề bài, Phương án ABCD, Mệnh đề Đúng/Sai và Lời giải */
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stMarkdownContainer"] li,
+.opt-box-true, .opt-box-true p, .opt-box-true span,
+.opt-box-false, .opt-box-false p, .opt-box-false span,
 .solution-box, .solution-box p, .solution-box li,
-.opt-box-true, .opt-box-false,
-div[role="radiogroup"] > label p {
-    font-size: 17.5px !important;
-    line-height: 1.68 !important;
+div[role="radiogroup"] label,
+div[role="radiogroup"] label p,
+div[role="radiogroup"] label span,
+div[role="radiogroup"] div[data-testid="stMarkdownContainer"] p {
+    font-size: 18px !important;
+    line-height: 1.65 !important;
 }
 
+/* Cân bằng cỡ chữ Toán (KaTeX / MathJax) ngang bằng chữ tiếng Việt */
 .katex {
-    font-size: 1.03em !important;
+    font-size: 1.02em !important;
 }
 mjx-container {
-    font-size: 103% !important;
+    font-size: 102% !important;
 }
 
 .app-header-banner {
@@ -77,7 +83,7 @@ mjx-container {
 .app-header-banner p {
     color: #fde047 !important;
     margin: 6px 0 0 0 !important;
-    font-size: 17px !important;
+    font-size: 17.5px !important;
     font-weight: 600 !important;
     letter-spacing: 0.2px;
 }
@@ -190,7 +196,7 @@ div[role="radiogroup"] > label:hover {
     background-color: #ecfdf5;
     border: 1.5px solid #10b981;
     border-radius: 10px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     margin-bottom: 8px;
     color: #065f46;
     font-weight: 600;
@@ -199,7 +205,7 @@ div[role="radiogroup"] > label:hover {
     background-color: #f8fafc;
     border: 1px solid #e2e8f0;
     border-radius: 10px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     margin-bottom: 8px;
     color: #334155;
 }
@@ -207,7 +213,7 @@ div[role="radiogroup"] > label:hover {
     margin: 0 !important;
 }
 
-/* Định dạng 4 ô vuông trả lời ngắn chuẩn phiếu thi THPT */
+/* Định dạng 4 ô vuông trả lời ngắn sát nhau chuẩn phiếu thi THPT */
 div[data-testid="stTextInput"] input[maxlength="1"] {
     text-align: center !important;
     font-size: 22px !important;
@@ -216,8 +222,9 @@ div[data-testid="stTextInput"] input[maxlength="1"] {
     background-color: #ffffff !important;
     border: 2.5px solid #3b82f6 !important;
     border-radius: 10px !important;
+    width: 58px !important;
     height: 56px !important;
-    padding: 4px !important;
+    padding: 2px !important;
     box-shadow: 0 2px 6px rgba(59, 130, 246, 0.12) !important;
 }
 div[data-testid="stTextInput"] input[maxlength="1"]:focus {
@@ -232,7 +239,7 @@ div[data-testid="stTextInput"] input[maxlength="1"]:focus {
     color: #065f46;
     padding: 12px 18px;
     border-radius: 10px;
-    font-size: 16.5px;
+    font-size: 17.5px;
     font-weight: 600;
     margin-top: 10px;
 }
@@ -350,7 +357,6 @@ def question_to_latex_block(q):
     tag_id = q.get("tag_id", "12-C1-B1-N")
     raw_tex = (q.get("raw_tex") or "").strip()
 
-    # Nếu câu hỏi chưa bị chỉnh sửa thủ công trên web và có sẵn raw_tex gốc thì giữ nguyên raw_tex gốc (cập nhật lại %[tag_id])
     if raw_tex and not q.get("_manually_edited"):
         if re.match(r'^\\begin\{(ex|bt)\}\s*%\[[^\]]*\]', raw_tex):
             raw_tex = re.sub(r'^(\\begin\{(?:ex|bt)\})\s*%\[[^\]]*\]', rf'\1%[{tag_id}]', raw_tex, count=1)
@@ -510,7 +516,6 @@ def clean_leftover_spaces(txt):
     txt = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", txt)
     txt = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", txt)
 
-    # Bảo vệ các khối toán $...$ và $$...$$ trước khi đổi "\\" ngoài văn bản thành <br>
     saved_math = {}
     def _keep_math(m):
         k = f"@@M_{len(saved_math)}@@"
@@ -591,7 +596,7 @@ def check_question_health(q):
     return " | ".join(issues)
 
 def render_question_card(q, index_label):
-    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) với cỡ chữ văn bản và toán cân đối"""
+    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100% ở cả 4 phần"""
     sanitize_question_obj(q)
     status_str = check_question_health(q)
     st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
@@ -616,7 +621,7 @@ def render_question_card(q, index_label):
     )
 
     stem_disp = clean_leftover_spaces(q.get("stem", ""))
-    st.markdown(f'<div class="q-content-area">\n\n{stem_disp}\n\n</div>', unsafe_allow_html=True)
+    st.markdown(stem_disp, unsafe_allow_html=True)
 
     if part_num == 1:
         labels = ["A", "B", "C", "D"]
@@ -637,7 +642,8 @@ def render_question_card(q, index_label):
             badge = "🟢 **[Đúng]**" if st_i.get("is_true") else "🔴 **[Sai]**"
             lbl = st_labels[idx] if idx < 4 else f"{idx+1})"
             st_txt = clean_leftover_spaces(st_i.get("text", ""))
-            st.markdown(f'<div class="q-content-area">- <b>{lbl}</b> {st_txt} $\\longrightarrow$ {badge}</div>', unsafe_allow_html=True)
+            # Dùng Markdown thuần (không bọc thẻ <div> cùng dòng) để KaTeX/MathJax luôn dịch công thức toán ở ý a) b) c) d)
+            st.markdown(f"- **{lbl}** {st_txt} $\\longrightarrow$ {badge}", unsafe_allow_html=True)
     elif part_num == 3:
         st.markdown(f"🔑 **Đáp số trả lời ngắn:** `{q.get('short_ans', '')}`")
     elif part_num == 4:
@@ -646,7 +652,7 @@ def render_question_card(q, index_label):
     sol_text = clean_leftover_spaces(q.get("solution", "").strip())
     if sol_text:
         st.markdown(
-            f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**<br>\n\n{sol_text}\n\n</div>',
+            f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{sol_text}\n\n</div>',
             unsafe_allow_html=True
         )
     else:
@@ -848,7 +854,7 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
     questions = selected_exam.get("questions", [])
     scoring_cfg = selected_exam.get("scoring_config") or {"p1": 0.25, "p2": 1.0, "p3": 0.5, "p4": 1.0}
     max_snaps = max([len(s.get("snapshots") or []) for s in subs] + [1])
-    max_snaps = min(max_snaps, 12)  # Tối đa 12 cột ảnh camera trực quan trên mỗi dòng
+    max_snaps = min(max_snaps, 12)
 
     headers = [
         "STT", "Tài khoản", "Họ và tên", "Lớp", "Trạng thái",
@@ -909,7 +915,6 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
             c_cell.border = thin_border
             c_cell.alignment = Alignment(horizontal="center" if c_i != 3 else "left", vertical="center", wrap_text=True)
 
-        # Nhúng ảnh chụp camera trực tiếp vào các cột Ảnh Camera
         for snap_idx, snap_obj in enumerate(snaps[:max_snaps]):
             img_b64 = snap_obj.get("img", "")
             if "," in img_b64:
@@ -928,7 +933,6 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
                 except Exception:
                     pass
 
-    # Sheet 2: Thống kê tỷ lệ làm sai từng câu
     ws_stats = wb.create_sheet(title="Thong_ke_cau_sai")
     if item_stats:
         stat_headers = ["Câu gốc", "Phần", "Mã ID", "Bài học", "Mức độ", "Số HS sai / Tổng", "Tỷ lệ sai (%)", "Chi tiết phân bố đáp án"]
@@ -943,7 +947,6 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
             ws_stats.column_dimensions[col[0].column_letter].width = 22
         ws_stats.column_dimensions["H"].width = 55
 
-    # Sheet 3: Chi tiết đáp án từng câu của học sinh
     ws_detail = wb.create_sheet(title="Chi_tiet_bai_lam_HS")
     q_headers = ["Tài khoản", "Họ và tên", "Lớp", "Điểm số", "Thời gian làm bài"] + [
         f"Câu {i+1} ({q.get('tag_id','')})" for i, q in enumerate(questions)
@@ -1200,7 +1203,7 @@ def generate_feedback(total, s1, s2, s3, n1, n2, n3, scoring_cfg):
         comments.append("- **Phần III (Trả lời ngắn):** Cần rèn luyện thêm kỹ năng giải toán thực tế và làm tròn số chính xác.")
     return "\n".join(comments)
 
-# ================= COMPONENT GIÁM SÁT =================
+# ================= COMPONENT GIÁM SÁT & TỰ ĐỘNG NHẢY Ô TRẢ LỜI NGẮN =================
 def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_id):
     html_code = f"""
     <div style="display:flex; align-items:center; justify-content:space-between; background:linear-gradient(90deg, #0f172a, #1e293b); color:white; padding:12px 20px; border-radius:12px; font-family:sans-serif; box-shadow:0 4px 12px rgba(0,0,0,0.12);">
@@ -1319,6 +1322,59 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
             updateSupabaseProctor({{ snapshots: snapshots }});
         }}
     }}
+
+    // Tự động nhảy con trỏ qua ô tiếp theo khi điền đáp số trả lời ngắn (4 ô vuông)
+    function bindShortAnswerAutoAdvance() {{
+        try {{
+            const parentDoc = window.parent.document;
+            const singleInputs = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+            singleInputs.forEach((inp, idx) => {{
+                if (inp.dataset.autoAdvBound === "1") return;
+                inp.dataset.autoAdvBound = "1";
+
+                inp.addEventListener("input", (e) => {{
+                    const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+                    const curIdx = allInps.indexOf(inp);
+                    if (inp.value && inp.value.length >= 1 && (curIdx % 4) < 3) {{
+                        const nextInp = allInps[curIdx + 1];
+                        if (nextInp) {{
+                            window.parent.__targetShortBoxIdx = curIdx + 1;
+                            window.parent.__targetShortBoxTime = Date.now();
+                            setTimeout(() => {{
+                                nextInp.focus();
+                                nextInp.select();
+                            }}, 20);
+                        }}
+                    }}
+                }});
+
+                inp.addEventListener("keydown", (e) => {{
+                    const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+                    const curIdx = allInps.indexOf(inp);
+                    if (e.key === "Backspace" && (!inp.value || inp.value.length === 0) && (curIdx % 4) > 0) {{
+                        const prevInp = allInps[curIdx - 1];
+                        if (prevInp) {{
+                            window.parent.__targetShortBoxIdx = curIdx - 1;
+                            window.parent.__targetShortBoxTime = Date.now();
+                            setTimeout(() => {{
+                                prevInp.focus();
+                                prevInp.select();
+                            }}, 20);
+                        }}
+                    }}
+                }});
+            }});
+
+            // Giữ focus ở ô tiếp theo ngay cả khi Streamlit rerun làm mới DOM
+            if (window.parent.__targetShortBoxIdx !== undefined && (Date.now() - (window.parent.__targetShortBoxTime || 0)) < 1200) {{
+                const targetInp = singleInputs[window.parent.__targetShortBoxIdx];
+                if (targetInp && parentDoc.activeElement !== targetInp) {{
+                    targetInp.focus();
+                }}
+            }}
+        }} catch (err) {{}}
+    }}
+    setInterval(bindShortAnswerAutoAdvance, 250);
     </script>
     """
     components.html(html_code, height=110)
@@ -1330,7 +1386,7 @@ if "user" not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.role is None:
-    tab_hs, tab_gv = st.tabs(["👨‍🎓 Học sinh Đăng nhập", "👨‍🏫 Giáo viên Quản trị"])
+    tab_hs, tab_gv = st.tabs(["👨‍🎓 Học sinh", "👨‍🏫 Giáo viên"])
 
     with tab_hs:
         with st.form("student_login"):
@@ -1373,25 +1429,21 @@ with st.sidebar:
         st.rerun()
 
 # =====================================================================
-# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (5 TAB ĐỘC LẬP)
+# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (4 TAB RÚT GỌN 2-4 CHỮ)
 # =====================================================================
 if st.session_state.role == "teacher":
-    t_bank, t_matrix, t_exam, t_stu, t_res = st.tabs([
-        "🏦 1. Quản lý Ngân hàng Câu hỏi",
-        "🎲 2. Trộn đề theo Ma trận từng Bài",
-        "📄 3. Tạo đề nhanh & Quản lý Đề thi",
-        "👥 4. Quản lý Học sinh theo Lớp",
-        "📊 5. Bảng điểm, Giám sát & Thống kê"
+    t_bank, t_create, t_manage, t_stu = st.tabs([
+        "🏦 Ngân hàng đề",
+        "🎲 Tạo đề",
+        "📂 Quản lý đề",
+        "👥 Quản lý học sinh"
     ])
 
     # -----------------------------------------------------------------
-    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (THỐNG KÊ TOÀN KHO, XUẤT LATEX, NẠP, SỬA/XÓA)
+    # TAB 1: NGÂN HÀNG ĐỀ
     # -----------------------------------------------------------------
     with t_bank:
-        # -------------------------------------------------------------
-        # MỤC 0: THỐNG KÊ TOÀN BỘ NGÂN HÀNG CÂU HỎI & XUẤT FILE LATEX TOÀN KHO
-        # -------------------------------------------------------------
-        with st.expander("📊 0. Xem Thống kê Toàn bộ Ngân hàng Câu hỏi hiện tại & Lưu mã LaTeX (.tex) về máy", expanded=True):
+        with st.expander("📊 0. Thống kê toàn bộ Ngân hàng câu hỏi & Lưu mã LaTeX (.tex) về máy", expanded=True):
             all_meta = fetch_all_bank_metadata()
             if not all_meta:
                 st.info("📭 Ngân hàng câu hỏi hiện đang trống. Hãy nạp câu hỏi ở mục 1 bên dưới nhé!")
@@ -1507,7 +1559,7 @@ if st.session_state.role == "teacher":
 
                 exp_c1, exp_c2 = st.columns(2)
                 exp_c1.download_button(
-                    "📥 Xuất báo cáo thống kê toàn bộ Ngân hàng ra Excel (.xlsx)",
+                    "📥 Xuất thống kê toàn Ngân hàng ra Excel (.xlsx)",
                     stat_excel_buf.getvalue(),
                     "thong_ke_ngan_hang_cau_hoi.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1804,7 +1856,6 @@ if st.session_state.role == "teacher":
                 f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
             )
 
-            # Nút xuất LaTeX cho Chương/Bài đang chọn
             q_list_filtered_for_tex = []
             for it in bank_items:
                 qd_tmp = it.get("question_data") or {}
@@ -1924,7 +1975,7 @@ if st.session_state.role == "teacher":
         with st.expander("🚨 3. Xóa sạch Ngân hàng câu hỏi & Đánh số lại ID Kho từ #1"):
             st.warning(
                 "⚠️ **Cảnh báo quan trọng:** Hành động này sẽ xóa các câu hỏi trong bảng `question_bank` trên Supabase để giải phóng bộ nhớ và đặt lại bộ đếm ID Kho về lại từ `#1`. "
-                "Các đề thi đã xuất bản ở Tab 3 sẽ không bị ảnh hưởng."
+                "Các đề thi đã xuất bản sẽ không bị ảnh hưởng."
             )
             del_scope = st.radio(
                 "Chọn phạm vi Ngân hàng muốn xóa:",
@@ -1958,403 +2009,518 @@ if st.session_state.role == "teacher":
                     st.error(f"Lỗi khi xóa ngân hàng: {e}")
 
     # -----------------------------------------------------------------
-    # TAB 2: TRỘN ĐỀ THI THEO MA TRẬN CHI TIẾT TỪNG BÀI HỌC
+    # TAB 2: TẠO ĐỀ (GỘP TRỘN ĐỀ THEO MA TRẬN & TẠO ĐỀ NHANH TỪ FILE)
     # -----------------------------------------------------------------
-    with t_matrix:
-        st.subheader("🎲 Thiết lập Ma trận & Rút câu hỏi ngẫu nhiên theo từng Bài học")
-        st.info("💡 Bạn có thể chọn nhiều Chương, tích chọn các Bài học đã dạy và **nhập số lượng câu hỏi cần lấy riêng cho từng Bài học** ở bên dưới.")
+    with t_create:
+        sub_create_mat, sub_create_fast = st.tabs([
+            "🎲 Trộn theo ma trận",
+            "📄 Nạp đề từ file"
+        ])
 
-        f_col1, f_col2 = st.columns([1, 3])
-        sel_g = f_col1.selectbox("1. Chọn Khối lớp", ["12", "11", "10", "9", "8", "7", "6"], key="mat_g")
-        avail_chaps = KNTT_DATA[sel_g]["chapters"]
-        chap_keys = list(avail_chaps.keys())
+        with sub_create_mat:
+            st.subheader("🎲 Thiết lập Ma trận & Rút câu hỏi ngẫu nhiên theo từng Bài học")
+            st.info("💡 Chọn Chương và các Bài học đã dạy, sau đó nhập số lượng câu hỏi cần lấy riêng cho từng Bài học ở bên dưới.")
 
-        sel_chaps = f_col2.multiselect(
-            "2. Chọn 1 hoặc nhiều Chương cần kiểm tra:",
-            options=chap_keys,
-            default=[chap_keys[0]] if chap_keys else [],
-            format_func=lambda k: avail_chaps[k],
-            key="mat_multi_c"
-        )
+            f_col1, f_col2 = st.columns([1, 3])
+            sel_g = f_col1.selectbox("1. Chọn Khối lớp", ["12", "11", "10", "9", "8", "7", "6"], key="mat_g")
+            avail_chaps = KNTT_DATA[sel_g]["chapters"]
+            chap_keys = list(avail_chaps.keys())
 
-        if not sel_chaps:
-            st.warning("👆 Vui lòng chọn ít nhất 1 Chương ở mục 2.")
-        else:
-            avail_lessons = {}
-            for b_k, (c_k, b_name) in KNTT_DATA[sel_g]["lessons"].items():
-                if c_k in sel_chaps:
-                    avail_lessons[b_k] = f"[{c_k}] {b_name}"
-
-            sel_lessons = st.multiselect(
-                "3. Chọn các Bài học cần đưa vào Ma trận đề thi (VD: Chỉ chọn Bài 1, Bài 2):",
-                options=list(avail_lessons.keys()),
-                default=list(avail_lessons.keys())[:2] if len(avail_lessons) >= 2 else list(avail_lessons.keys()),
-                format_func=lambda k: avail_lessons[k],
-                key=f"mat_multi_b_{sel_g}_{'_'.join(sel_chaps)}"
+            sel_chaps = f_col2.multiselect(
+                "2. Chọn 1 hoặc nhiều Chương cần kiểm tra:",
+                options=chap_keys,
+                default=[chap_keys[0]] if chap_keys else [],
+                format_func=lambda k: avail_chaps[k],
+                key="mat_multi_c"
             )
 
-            if not sel_lessons:
-                st.warning("👆 Vui lòng chọn ít nhất 1 Bài học ở mục 3 để hiển thị bảng ma trận từng bài.")
+            if not sel_chaps:
+                st.warning("👆 Vui lòng chọn ít nhất 1 Chương ở mục 2.")
             else:
-                q_query = (
-                    supabase.table("question_bank")
-                    .select("*")
-                    .eq("grade", sel_g)
-                    .in_("chapter_code", sel_chaps)
-                    .in_("lesson_code", sel_lessons)
-                    .execute()
-                    .data
+                avail_lessons = {}
+                for b_k, (c_k, b_name) in KNTT_DATA[sel_g]["lessons"].items():
+                    if c_k in sel_chaps:
+                        avail_lessons[b_k] = f"[{c_k}] {b_name}"
+
+                sel_lessons = st.multiselect(
+                    "3. Chọn các Bài học cần đưa vào Ma trận đề thi:",
+                    options=list(avail_lessons.keys()),
+                    default=list(avail_lessons.keys())[:2] if len(avail_lessons) >= 2 else list(avail_lessons.keys()),
+                    format_func=lambda k: avail_lessons[k],
+                    key=f"mat_multi_b_{sel_g}_{'_'.join(sel_chaps)}"
                 )
 
-                if not q_query:
-                    st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc các Bài học đang chọn. Hãy sang Tab 1 để nạp câu hỏi trước nhé!")
+                if not sel_lessons:
+                    st.warning("👆 Vui lòng chọn ít nhất 1 Bài học ở mục 3 để hiển thị bảng ma trận từng bài.")
                 else:
-                    lesson_pools = {
-                        b_code: {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3, 4]}
-                        for b_code in sel_lessons
-                    }
-                    for item in q_query:
-                        b_c = item.get("lesson_code")
-                        p_v = item.get("part", 1)
-                        l_v = item.get("level_code", "N")
-                        if l_v not in ["N", "H", "V", "C"]:
-                            l_v = "N"
-                        if b_c in lesson_pools and p_v in lesson_pools[b_c]:
-                            lesson_pools[b_c][p_v][l_v].append(item)
-
-                    summary_rows = []
-                    for b_code in sel_lessons:
-                        b_pool = lesson_pools[b_code]
-                        total_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
-                        summary_rows.append({
-                            "Mã Bài": b_code,
-                            "Tên Bài học": avail_lessons[b_code],
-                            "Tổng có trong kho": f"{total_b} câu",
-                            "Phần I (ABCD)": f"N:{len(b_pool[1]['N'])} | H:{len(b_pool[1]['H'])} | V:{len(b_pool[1]['V'])} | C:{len(b_pool[1]['C'])}",
-                            "Phần II (Đ/S)": f"N:{len(b_pool[2]['N'])} | H:{len(b_pool[2]['H'])} | V:{len(b_pool[2]['V'])} | C:{len(b_pool[2]['C'])}",
-                            "Phần III (TLN)": f"N:{len(b_pool[3]['N'])} | H:{len(b_pool[3]['H'])} | V:{len(b_pool[3]['V'])} | C:{len(b_pool[3]['C'])}",
-                            "Phần IV (Tự luận)": f"N:{len(b_pool[4]['N'])} | H:{len(b_pool[4]['H'])} | V:{len(b_pool[4]['V'])} | C:{len(b_pool[4]['C'])}"
-                        })
-                    st.markdown("##### 📊 Thống kê số lượng câu hỏi hiện có trong Ngân hàng theo từng Bài học đã chọn:")
-                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
-                    st.markdown("#### 🎯 Nhập số lượng câu muốn bốc riêng cho TỪNG BÀI HỌC:")
-                    picked_per_lesson = {}
-                    total_by_part = {1: 0, 2: 0, 3: 0, 4: 0}
-
-                    for b_code in sel_lessons:
-                        b_pool = lesson_pools[b_code]
-                        total_avail_in_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
-                        with st.expander(f"📘 {avail_lessons[b_code]} (Trong kho hiện có: {total_avail_in_b} câu)", expanded=True):
-                            if total_avail_in_b == 0:
-                                st.caption("*(Bài học này hiện chưa có câu hỏi nào trong Ngân hàng)*")
-                            else:
-                                for p_idx in [1, 2, 3, 4]:
-                                    max_n = len(b_pool[p_idx]["N"])
-                                    max_h = len(b_pool[p_idx]["H"])
-                                    max_v = len(b_pool[p_idx]["V"])
-                                    max_c = len(b_pool[p_idx]["C"])
-                                    if (max_n + max_h + max_v + max_c) == 0:
-                                        for lv in ["N", "H", "V", "C"]:
-                                            picked_per_lesson[(b_code, p_idx, lv)] = 0
-                                        continue
-
-                                    c_lbl, mc1, mc2, mc3, mc4 = st.columns([1.8, 1, 1, 1, 1])
-                                    c_lbl.markdown(f"<div style='padding-top:28px;font-weight:600;'>{PART_LABELS[p_idx]}</div>", unsafe_allow_html=True)
-                                    val_n = mc1.number_input(f"NB (Có {max_n})", 0, max_n, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_N")
-                                    val_h = mc2.number_input(f"TH (Có {max_h})", 0, max_h, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_H")
-                                    val_v = mc3.number_input(f"VD (Có {max_v})", 0, max_v, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_V")
-                                    val_c = mc4.number_input(f"VDC (Có {max_c})", 0, max_c, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_C")
-
-                                    picked_per_lesson[(b_code, p_idx, "N")] = val_n
-                                    picked_per_lesson[(b_code, p_idx, "H")] = val_h
-                                    picked_per_lesson[(b_code, p_idx, "V")] = val_v
-                                    picked_per_lesson[(b_code, p_idx, "C")] = val_c
-                                    total_by_part[p_idx] += (val_n + val_h + val_v + val_c)
-
-                    grand_total_qs = sum(total_by_part.values())
-                    st.info(
-                        f"📌 **Tổng số câu đã chọn trên Ma trận:** **{grand_total_qs} câu** — "
-                        f"Phần I: `{total_by_part[1]}` câu | Phần II: `{total_by_part[2]}` câu | "
-                        f"Phần III: `{total_by_part[3]}` câu | Phần IV (Tự luận): `{total_by_part[4]}` câu."
+                    q_query = (
+                        supabase.table("question_bank")
+                        .select("*")
+                        .eq("grade", sel_g)
+                        .in_("chapter_code", sel_chaps)
+                        .in_("lesson_code", sel_lessons)
+                        .execute()
+                        .data
                     )
 
-                    if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
-                        selected_qs = []
-                        for p_idx in [1, 2, 3, 4]:
-                            for b_code in sel_lessons:
-                                for lvl in ["N", "H", "V", "C"]:
-                                    need_cnt = picked_per_lesson.get((b_code, p_idx, lvl), 0)
-                                    if need_cnt > 0:
-                                        pool = lesson_pools[b_code][p_idx][lvl]
-                                        chosen_items = random.sample(pool, need_cnt)
-                                        for item in chosen_items:
-                                            q_copy = sanitize_question_obj(item["question_data"].copy())
-                                            if item.get("raw_tex") and not q_copy.get("raw_tex"):
-                                                q_copy["raw_tex"] = item["raw_tex"]
-                                            q_copy["id"] = f"q_{len(selected_qs) + 1}"
-                                            selected_qs.append(q_copy)
+                    if not q_query:
+                        st.warning("Chưa có câu hỏi nào trong Ngân hàng thuộc các Bài học đang chọn. Hãy sang tab Ngân hàng đề để nạp câu hỏi trước nhé!")
+                    else:
+                        lesson_pools = {
+                            b_code: {p: {"N": [], "H": [], "V": [], "C": []} for p in [1, 2, 3, 4]}
+                            for b_code in sel_lessons
+                        }
+                        for item in q_query:
+                            b_c = item.get("lesson_code")
+                            p_v = item.get("part", 1)
+                            l_v = item.get("level_code", "N")
+                            if l_v not in ["N", "H", "V", "C"]:
+                                l_v = "N"
+                            if b_c in lesson_pools and p_v in lesson_pools[b_c]:
+                                lesson_pools[b_c][p_v][l_v].append(item)
 
-                        if not selected_qs:
-                            st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận các bài học phía trên!")
-                        else:
-                            st.session_state["draft_matrix_qs"] = selected_qs
-                            st.session_state["draft_matrix_grade"] = sel_g
-                            st.session_state["draft_matrix_chap"] = (
-                                avail_chaps[sel_chaps[0]] if len(sel_chaps) == 1 else "Ôn thi giữa học kì 1"
-                            )
-                            st.rerun()
+                        summary_rows = []
+                        for b_code in sel_lessons:
+                            b_pool = lesson_pools[b_code]
+                            total_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
+                            summary_rows.append({
+                                "Mã Bài": b_code,
+                                "Tên Bài học": avail_lessons[b_code],
+                                "Tổng có trong kho": f"{total_b} câu",
+                                "Phần I (ABCD)": f"N:{len(b_pool[1]['N'])} | H:{len(b_pool[1]['H'])} | V:{len(b_pool[1]['V'])} | C:{len(b_pool[1]['C'])}",
+                                "Phần II (Đ/S)": f"N:{len(b_pool[2]['N'])} | H:{len(b_pool[2]['H'])} | V:{len(b_pool[2]['V'])} | C:{len(b_pool[2]['C'])}",
+                                "Phần III (TLN)": f"N:{len(b_pool[3]['N'])} | H:{len(b_pool[3]['H'])} | V:{len(b_pool[3]['V'])} | C:{len(b_pool[3]['C'])}",
+                                "Phần IV (Tự luận)": f"N:{len(b_pool[4]['N'])} | H:{len(b_pool[4]['H'])} | V:{len(b_pool[4]['V'])} | C:{len(b_pool[4]['C'])}"
+                            })
+                        st.markdown("##### 📊 Thống kê số lượng câu hỏi hiện có trong Ngân hàng theo từng Bài học đã chọn:")
+                        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-                    if st.session_state.get("draft_matrix_qs"):
-                        draft_qs = st.session_state["draft_matrix_qs"]
-                        st.markdown("---")
-                        st.subheader(f"🧐 Xem kỹ Bản nháp Đề thi ({len(draft_qs)} câu), Tải file LaTeX (.tex) & Đổi câu hỏi")
+                        st.markdown("#### 🎯 Nhập số lượng câu muốn bốc riêng cho TỪNG BÀI HỌC:")
+                        picked_per_lesson = {}
+                        total_by_part = {1: 0, 2: 0, 3: 0, 4: 0}
 
-                        dr_dl1, dr_dl2 = st.columns(2)
-                        dr_dl1.download_button(
-                            "📄 Tải mã LaTeX đề nháp này (Chỉ khối \\begin{ex})",
-                            build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=False).encode("utf-8"),
-                            "de_nhap_ex_blocks.tex",
-                            "text/plain",
-                            use_container_width=True
+                        for b_code in sel_lessons:
+                            b_pool = lesson_pools[b_code]
+                            total_avail_in_b = sum(len(b_pool[p][lv]) for p in [1, 2, 3, 4] for lv in ["N", "H", "V", "C"])
+                            with st.expander(f"📘 {avail_lessons[b_code]} (Trong kho hiện có: {total_avail_in_b} câu)", expanded=True):
+                                if total_avail_in_b == 0:
+                                    st.caption("*(Bài học này hiện chưa có câu hỏi nào trong Ngân hàng)*")
+                                else:
+                                    for p_idx in [1, 2, 3, 4]:
+                                        max_n = len(b_pool[p_idx]["N"])
+                                        max_h = len(b_pool[p_idx]["H"])
+                                        max_v = len(b_pool[p_idx]["V"])
+                                        max_c = len(b_pool[p_idx]["C"])
+                                        if (max_n + max_h + max_v + max_c) == 0:
+                                            for lv in ["N", "H", "V", "C"]:
+                                                picked_per_lesson[(b_code, p_idx, lv)] = 0
+                                            continue
+
+                                        c_lbl, mc1, mc2, mc3, mc4 = st.columns([1.8, 1, 1, 1, 1])
+                                        c_lbl.markdown(f"<div style='padding-top:28px;font-weight:600;'>{PART_LABELS[p_idx]}</div>", unsafe_allow_html=True)
+                                        val_n = mc1.number_input(f"NB (Có {max_n})", 0, max_n, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_N")
+                                        val_h = mc2.number_input(f"TH (Có {max_h})", 0, max_h, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_H")
+                                        val_v = mc3.number_input(f"VD (Có {max_v})", 0, max_v, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_V")
+                                        val_c = mc4.number_input(f"VDC (Có {max_c})", 0, max_c, 0, key=f"pk_{sel_g}_{b_code}_{p_idx}_C")
+
+                                        picked_per_lesson[(b_code, p_idx, "N")] = val_n
+                                        picked_per_lesson[(b_code, p_idx, "H")] = val_h
+                                        picked_per_lesson[(b_code, p_idx, "V")] = val_v
+                                        picked_per_lesson[(b_code, p_idx, "C")] = val_c
+                                        total_by_part[p_idx] += (val_n + val_h + val_v + val_c)
+
+                        grand_total_qs = sum(total_by_part.values())
+                        st.info(
+                            f"📌 **Tổng số câu đã chọn trên Ma trận:** **{grand_total_qs} câu** — "
+                            f"Phần I: `{total_by_part[1]}` câu | Phần II: `{total_by_part[2]}` câu | "
+                            f"Phần III: `{total_by_part[3]}` câu | Phần IV (Tự luận): `{total_by_part[4]}` câu."
                         )
-                        dr_dl2.download_button(
-                            "📘 Tải file .tex hoàn chỉnh của đề nháp này (Đủ \\documentclass)",
-                            build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=True).encode("utf-8"),
-                            "de_nhap_full_doc.tex",
-                            "text/plain",
-                            use_container_width=True
-                        )
 
-                        for d_idx, dq in enumerate(draft_qs):
-                            col_dcard, col_dbtn = st.columns([5.8, 1.2])
-                            with col_dcard:
-                                render_question_card(dq, f"Câu {d_idx + 1}")
-                            with col_dbtn:
-                                if st.button("🔄 Đổi câu khác", key=f"swap_draft_{d_idx}", use_container_width=True):
-                                    new_q = find_replacement_question(dq, draft_qs)
-                                    if new_q:
-                                        draft_qs[d_idx] = new_q
-                                        st.session_state["draft_matrix_qs"] = draft_qs
-                                        st.toast(f"✅ Đã đổi Câu {d_idx + 1} sang một câu hỏi mới!")
-                                        st.rerun()
-                                    else:
-                                        st.warning("Kho không còn câu hỏi dự phòng nào khác cùng Bài/Mức độ này!")
-                                if st.button("🗑️ Xóa câu này", key=f"rm_draft_{d_idx}", use_container_width=True):
-                                    draft_qs.pop(d_idx)
-                                    for idx_re, q_re in enumerate(draft_qs):
-                                        q_re["id"] = f"q_{idx_re + 1}"
-                                    st.session_state["draft_matrix_qs"] = draft_qs
-                                    st.rerun()
-                            st.divider()
+                        if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
+                            selected_qs = []
+                            for p_idx in [1, 2, 3, 4]:
+                                for b_code in sel_lessons:
+                                    for lvl in ["N", "H", "V", "C"]:
+                                        need_cnt = picked_per_lesson.get((b_code, p_idx, lvl), 0)
+                                        if need_cnt > 0:
+                                            pool = lesson_pools[b_code][p_idx][lvl]
+                                            chosen_items = random.sample(pool, need_cnt)
+                                            for item in chosen_items:
+                                                q_copy = sanitize_question_obj(item["question_data"].copy())
+                                                if item.get("raw_tex") and not q_copy.get("raw_tex"):
+                                                    q_copy["raw_tex"] = item["raw_tex"]
+                                                q_copy["id"] = f"q_{len(selected_qs) + 1}"
+                                                selected_qs.append(q_copy)
 
-                        st.markdown("#### ⚙️ Thiết lập thông tin & Xuất bản chính thức Đề thi này:")
-                        topic_opts_mat = get_topic_options_for_grade(st.session_state.get("draft_matrix_grade", sel_g))
-                        default_topic_mat = st.session_state.get("draft_matrix_chap", topic_opts_mat[0])
-                        def_t_idx = topic_opts_mat.index(default_topic_mat) if default_topic_mat in topic_opts_mat else 0
-
-                        mt0, mt1, mt2 = st.columns([2, 2.2, 1])
-                        mat_chap_choice = mt0.selectbox("Chọn Chương / Kỳ ôn thi:", topic_opts_mat, index=def_t_idx, key="pub_mat_chap_sel")
-                        if mat_chap_choice.startswith("✍️"):
-                            mat_chap_final = st.text_input("Nhập tên Chuyên đề / Kỳ thi tùy chỉnh:", value="Ôn thi giữa học kì 1", key="pub_mat_chap_custom")
-                        else:
-                            mat_chap_final = mat_chap_choice
-
-                        mat_title = mt1.text_input("Tên đề thi mới", placeholder="VD: Đề ôn thi giữa học kì 1 - Đề số 01", key="pub_mat_title")
-                        mat_dur = mt2.number_input("Thời gian (phút)", 5, 180, 45, key="pub_mat_dur")
-
-                        ms1, ms2, ms3, ms4 = st.columns(4)
-                        m_pt1 = ms1.number_input("Điểm mỗi câu Phần I", 0.0, 10.0, 0.25, 0.05, key="m_pt1")
-                        m_pt2 = ms2.number_input("Điểm tối đa mỗi câu Phần II", 0.0, 10.0, 1.0, 0.25, key="m_pt2")
-                        m_pt3 = ms3.number_input("Điểm mỗi câu Phần III", 0.0, 10.0, 0.5, 0.1, key="m_pt3")
-                        m_pt4 = ms4.number_input("Điểm mỗi câu Tự luận (Phần IV)", 0.0, 10.0, 1.0, 0.25, key="m_pt4")
-
-                        if st.button("🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY", type="primary"):
-                            if not mat_title:
-                                st.warning("Vui lòng nhập Tên đề thi mới!")
+                            if not selected_qs:
+                                st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận các bài học phía trên!")
                             else:
-                                supabase.table("exams").insert({
-                                    "title": mat_title.strip(),
-                                    "grade": st.session_state.get("draft_matrix_grade", sel_g),
-                                    "chapter": mat_chap_final.strip(),
-                                    "duration": mat_dur,
-                                    "questions": draft_qs,
-                                    "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
-                                    "show_solutions": False,
-                                    "is_active": True
-                                }).execute()
-                                del st.session_state["draft_matrix_qs"]
-                                st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công! Bạn có thể quản lý đề ở Tab 3.")
+                                st.session_state["draft_matrix_qs"] = selected_qs
+                                st.session_state["draft_matrix_grade"] = sel_g
+                                st.session_state["draft_matrix_chap"] = (
+                                    avail_chaps[sel_chaps[0]] if len(sel_chaps) == 1 else "Ôn thi giữa học kì 1"
+                                )
                                 st.rerun()
 
-    # -----------------------------------------------------------------
-    # TAB 3: TẠO ĐỀ TRỰC TIẾP TỪ FILE & XEM / TẢI LATEX / SỬA ĐỀ ĐÃ SOẠN
-    # -----------------------------------------------------------------
-    with t_exam:
-        st.subheader("1. Tải lên trực tiếp 1 đề thi hoàn chỉnh (.tex hoặc .txt)")
-        c_grade, c_chap = st.columns([1, 2.5])
-        grade_sel = c_grade.selectbox("Chọn Khối lớp áp dụng", ["12", "11", "10", "9", "8", "7", "6"])
-        topic_options = get_topic_options_for_grade(grade_sel)
-        chapter_choice = c_chap.selectbox("Chọn Chương / Chuyên đề / Kỳ ôn thi:", topic_options)
-        if chapter_choice.startswith("✍️"):
-            chapter_sel = st.text_input("Nhập tên Chuyên đề / Kỳ thi:", value="Ôn thi giữa học kì 1")
-        else:
-            chapter_sel = chapter_choice
+                        if st.session_state.get("draft_matrix_qs"):
+                            draft_qs = st.session_state["draft_matrix_qs"]
+                            st.markdown("---")
+                            st.subheader(f"🧐 Xem kỹ Bản nháp Đề thi ({len(draft_qs)} câu), Tải file LaTeX (.tex) & Đổi câu hỏi")
 
-        c_title, c_dur = st.columns([3, 1])
-        exam_title = c_title.text_input("Tên bài kiểm tra", placeholder="VD: Đề ôn thi giữa học kì 1 - Đề số 01")
-        duration = c_dur.number_input("Thời gian (phút)", min_value=5, max_value=180, value=45)
-
-        st.markdown("**⚖️ Thiết lập thang điểm cho từng phần:**")
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        pt_p1 = sc1.number_input("Điểm mỗi câu Phần I (ABCD)", min_value=0.0, max_value=10.0, value=0.25, step=0.05)
-        pt_p2 = sc2.number_input("Điểm tối đa mỗi câu Phần II (Đ/S)", min_value=0.0, max_value=10.0, value=1.0, step=0.25)
-        pt_p3 = sc3.number_input("Điểm mỗi câu Phần III (TLN)", min_value=0.0, max_value=10.0, value=0.5, step=0.1)
-        pt_p4 = sc4.number_input("Điểm mỗi câu Phần IV (Tự luận)", min_value=0.0, max_value=10.0, value=1.0, step=0.25)
-
-        tex_file = st.file_uploader("Chọn file .tex hoặc .txt của bạn", type=["tex", "txt"])
-
-        if tex_file:
-            raw_tex = tex_file.read().decode("utf-8", errors="ignore")
-            with st.spinner("Đang phân tích cấu trúc LaTeX và biên dịch hình vẽ TikZ..."):
-                parsed_questions = [sanitize_question_obj(q) for q in parse_exam_tex(raw_tex)]
-
-            p1_cnt = sum(1 for q in parsed_questions if q["part"] == 1)
-            p2_cnt = sum(1 for q in parsed_questions if q["part"] == 2)
-            p3_cnt = sum(1 for q in parsed_questions if q["part"] == 3)
-            p4_cnt = sum(1 for q in parsed_questions if q["part"] == 4)
-            total_max_score = round(p1_cnt * pt_p1 + p2_cnt * pt_p2 + p3_cnt * pt_p3 + p4_cnt * pt_p4, 2)
-
-            st.success(
-                f"✅ Đã đọc **{len(parsed_questions)} câu hỏi**: Phần I ({p1_cnt} câu), "
-                f"Phần II ({p2_cnt} câu), Phần III ({p3_cnt} câu), Phần IV Tự luận ({p4_cnt} câu) "
-                f"$\\rightarrow$ **Tổng điểm: {total_max_score} điểm**."
-            )
-
-            with st.expander("👁️ Xem trước đề thi & lời giải sau khi biên dịch", expanded=True):
-                for idx, q in enumerate(parsed_questions):
-                    render_question_card(q, f"Câu {idx + 1}")
-                    st.divider()
-
-            if st.button("💾 Lưu và Xuất bản Đề Thi", type="primary"):
-                if not exam_title:
-                    st.warning("Vui lòng nhập Tên bài kiểm tra!")
-                else:
-                    supabase.table("exams").insert({
-                        "title": exam_title.strip(),
-                        "grade": grade_sel,
-                        "chapter": chapter_sel.strip(),
-                        "duration": duration,
-                        "questions": parsed_questions,
-                        "scoring_config": {"p1": pt_p1, "p2": pt_p2, "p3": pt_p3, "p4": pt_p4},
-                        "show_solutions": False,
-                        "is_active": True
-                    }).execute()
-                    st.success("🎉 Đã tạo đề thi thành công!")
-                    st.rerun()
-
-        st.divider()
-        st.subheader("📚 2. Quản lý Đề thi đã soạn (Tải file LaTeX .tex, Xem đề, Sửa/Đổi câu hỏi & Mở lời giải)")
-        exams_data = supabase.table("exams").select("*").order("grade", desc=True).order("chapter").order("id", desc=True).execute().data
-        if not exams_data:
-            st.info("Chưa có đề thi nào trong hệ thống.")
-        else:
-            grouped_exams = {}
-            for ex in exams_data:
-                g = ex.get("grade") or "12"
-                ch = ex.get("chapter") or "Chương chung"
-                grouped_exams.setdefault(g, {}).setdefault(ch, []).append(ex)
-
-            for g, chaps in grouped_exams.items():
-                with st.expander(f"📁 KHỐI {g} ({sum(len(v) for v in chaps.values())} đề thi)", expanded=True):
-                    for ch, ex_list in chaps.items():
-                        st.markdown(f"##### 📌 {ch}")
-                        for ex in ex_list:
-                            ex_qs = ex.get("questions", [])
-                            c1, c2, c3, c4, c5 = st.columns([3.2, 1.5, 1.5, 1.6, 1.2])
-                            c1.write(f"**#{ex['id']} - {ex['title']}** ({ex['duration']}p — {len(ex_qs)} câu)")
-                            show_sol = c2.toggle("Mở lời giải", value=ex["show_solutions"], key=f"sol_{ex['id']}")
-                            is_act = c3.toggle("Mở phòng thi", value=ex["is_active"], key=f"act_{ex['id']}")
-                            if show_sol != ex["show_solutions"] or is_act != ex["is_active"]:
-                                supabase.table("exams").update({"show_solutions": show_sol, "is_active": is_act}).eq("id", ex["id"]).execute()
-                                st.rerun()
-                            c4.download_button(
-                                "📥 Tải .tex",
-                                build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
-                                f"de_thi_{ex['id']}.tex",
+                            dr_dl1, dr_dl2 = st.columns(2)
+                            dr_dl1.download_button(
+                                "📄 Tải mã LaTeX đề nháp này (Chỉ khối \\begin{ex})",
+                                build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=False).encode("utf-8"),
+                                "de_nhap_ex_blocks.tex",
                                 "text/plain",
-                                key=f"dl_tex_ex_{ex['id']}",
                                 use_container_width=True
                             )
-                            if c5.button("🗑️ Xóa đề", key=f"del_{ex['id']}", use_container_width=True):
-                                supabase.table("exams").delete().eq("id", ex["id"]).execute()
+                            dr_dl2.download_button(
+                                "📘 Tải file .tex hoàn chỉnh của đề nháp này (Đủ \\documentclass)",
+                                build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=True).encode("utf-8"),
+                                "de_nhap_full_doc.tex",
+                                "text/plain",
+                                use_container_width=True
+                            )
+
+                            for d_idx, dq in enumerate(draft_qs):
+                                col_dcard, col_dbtn = st.columns([5.8, 1.2])
+                                with col_dcard:
+                                    render_question_card(dq, f"Câu {d_idx + 1}")
+                                with col_dbtn:
+                                    if st.button("🔄 Đổi câu khác", key=f"swap_draft_{d_idx}", use_container_width=True):
+                                        new_q = find_replacement_question(dq, draft_qs)
+                                        if new_q:
+                                            draft_qs[d_idx] = new_q
+                                            st.session_state["draft_matrix_qs"] = draft_qs
+                                            st.toast(f"✅ Đã đổi Câu {d_idx + 1} sang một câu hỏi mới!")
+                                            st.rerun()
+                                        else:
+                                            st.warning("Kho không còn câu hỏi dự phòng nào khác cùng Bài/Mức độ này!")
+                                    if st.button("🗑️ Xóa câu này", key=f"rm_draft_{d_idx}", use_container_width=True):
+                                        draft_qs.pop(d_idx)
+                                        for idx_re, q_re in enumerate(draft_qs):
+                                            q_re["id"] = f"q_{idx_re + 1}"
+                                        st.session_state["draft_matrix_qs"] = draft_qs
+                                        st.rerun()
+                                st.divider()
+
+                            st.markdown("#### ⚙️ Thiết lập thông tin & Xuất bản chính thức Đề thi này:")
+                            topic_opts_mat = get_topic_options_for_grade(st.session_state.get("draft_matrix_grade", sel_g))
+                            default_topic_mat = st.session_state.get("draft_matrix_chap", topic_opts_mat[0])
+                            def_t_idx = topic_opts_mat.index(default_topic_mat) if default_topic_mat in topic_opts_mat else 0
+
+                            mt0, mt1, mt2 = st.columns([2, 2.2, 1])
+                            mat_chap_choice = mt0.selectbox("Chọn Chương / Kỳ ôn thi:", topic_opts_mat, index=def_t_idx, key="pub_mat_chap_sel")
+                            if mat_chap_choice.startswith("✍️"):
+                                mat_chap_final = st.text_input("Nhập tên Chuyên đề / Kỳ thi tùy chỉnh:", value="Ôn thi giữa học kì 1", key="pub_mat_chap_custom")
+                            else:
+                                mat_chap_final = mat_chap_choice
+
+                            mat_title = mt1.text_input("Tên đề thi mới", placeholder="VD: Đề ôn thi giữa học kì 1 - Đề số 01", key="pub_mat_title")
+                            mat_dur = mt2.number_input("Thời gian (phút)", 5, 180, 45, key="pub_mat_dur")
+
+                            ms1, ms2, ms3, ms4 = st.columns(4)
+                            m_pt1 = ms1.number_input("Điểm mỗi câu Phần I", 0.0, 10.0, 0.25, 0.05, key="m_pt1")
+                            m_pt2 = ms2.number_input("Điểm tối đa mỗi câu Phần II", 0.0, 10.0, 1.0, 0.25, key="m_pt2")
+                            m_pt3 = ms3.number_input("Điểm mỗi câu Phần III", 0.0, 10.0, 0.5, 0.1, key="m_pt3")
+                            m_pt4 = ms4.number_input("Điểm mỗi câu Tự luận (Phần IV)", 0.0, 10.0, 1.0, 0.25, key="m_pt4")
+
+                            if st.button("🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY", type="primary"):
+                                if not mat_title:
+                                    st.warning("Vui lòng nhập Tên đề thi mới!")
+                                else:
+                                    supabase.table("exams").insert({
+                                        "title": mat_title.strip(),
+                                        "grade": st.session_state.get("draft_matrix_grade", sel_g),
+                                        "chapter": mat_chap_final.strip(),
+                                        "duration": mat_dur,
+                                        "questions": draft_qs,
+                                        "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
+                                        "show_solutions": False,
+                                        "is_active": True
+                                    }).execute()
+                                    del st.session_state["draft_matrix_qs"]
+                                    st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công! Bạn có thể xem ở tab **Quản lý đề**.")
+                                    st.rerun()
+
+        with sub_create_fast:
+            st.subheader("📄 Tải lên trực tiếp 1 đề thi hoàn chỉnh (.tex hoặc .txt)")
+            c_grade, c_chap = st.columns([1, 2.5])
+            grade_sel = c_grade.selectbox("Chọn Khối lớp áp dụng", ["12", "11", "10", "9", "8", "7", "6"])
+            topic_options = get_topic_options_for_grade(grade_sel)
+            chapter_choice = c_chap.selectbox("Chọn Chương / Chuyên đề / Kỳ ôn thi:", topic_options)
+            if chapter_choice.startswith("✍️"):
+                chapter_sel = st.text_input("Nhập tên Chuyên đề / Kỳ thi:", value="Ôn thi giữa học kì 1")
+            else:
+                chapter_sel = chapter_choice
+
+            c_title, c_dur = st.columns([3, 1])
+            exam_title = c_title.text_input("Tên bài kiểm tra", placeholder="VD: Đề ôn thi giữa học kì 1 - Đề số 01")
+            duration = c_dur.number_input("Thời gian (phút)", min_value=5, max_value=180, value=45)
+
+            st.markdown("**⚖️ Thiết lập thang điểm cho từng phần:**")
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            pt_p1 = sc1.number_input("Điểm mỗi câu Phần I (ABCD)", min_value=0.0, max_value=10.0, value=0.25, step=0.05)
+            pt_p2 = sc2.number_input("Điểm tối đa mỗi câu Phần II (Đ/S)", min_value=0.0, max_value=10.0, value=1.0, step=0.25)
+            pt_p3 = sc3.number_input("Điểm mỗi câu Phần III (TLN)", min_value=0.0, max_value=10.0, value=0.5, step=0.1)
+            pt_p4 = sc4.number_input("Điểm mỗi câu Phần IV (Tự luận)", min_value=0.0, max_value=10.0, value=1.0, step=0.25)
+
+            tex_file = st.file_uploader("Chọn file .tex hoặc .txt của bạn", type=["tex", "txt"])
+
+            if tex_file:
+                raw_tex = tex_file.read().decode("utf-8", errors="ignore")
+                with st.spinner("Đang phân tích cấu trúc LaTeX và biên dịch hình vẽ TikZ..."):
+                    parsed_questions = [sanitize_question_obj(q) for q in parse_exam_tex(raw_tex)]
+
+                p1_cnt = sum(1 for q in parsed_questions if q["part"] == 1)
+                p2_cnt = sum(1 for q in parsed_questions if q["part"] == 2)
+                p3_cnt = sum(1 for q in parsed_questions if q["part"] == 3)
+                p4_cnt = sum(1 for q in parsed_questions if q["part"] == 4)
+                total_max_score = round(p1_cnt * pt_p1 + p2_cnt * pt_p2 + p3_cnt * pt_p3 + p4_cnt * pt_p4, 2)
+
+                st.success(
+                    f"✅ Đã đọc **{len(parsed_questions)} câu hỏi**: Phần I ({p1_cnt} câu), "
+                    f"Phần II ({p2_cnt} câu), Phần III ({p3_cnt} câu), Phần IV Tự luận ({p4_cnt} câu) "
+                    f"$\\rightarrow$ **Tổng điểm: {total_max_score} điểm**."
+                )
+
+                with st.expander("👁️ Xem trước đề thi & lời giải sau khi biên dịch", expanded=True):
+                    for idx, q in enumerate(parsed_questions):
+                        render_question_card(q, f"Câu {idx + 1}")
+                        st.divider()
+
+                if st.button("💾 Lưu và Xuất bản Đề Thi", type="primary"):
+                    if not exam_title:
+                        st.warning("Vui lòng nhập Tên bài kiểm tra!")
+                    else:
+                        supabase.table("exams").insert({
+                            "title": exam_title.strip(),
+                            "grade": grade_sel,
+                            "chapter": chapter_sel.strip(),
+                            "duration": duration,
+                            "questions": parsed_questions,
+                            "scoring_config": {"p1": pt_p1, "p2": pt_p2, "p3": pt_p3, "p4": pt_p4},
+                            "show_solutions": False,
+                            "is_active": True
+                        }).execute()
+                        st.success("🎉 Đã tạo đề thi thành công! Bạn có thể quản lý ở tab **Quản lý đề**.")
+                        st.rerun()
+
+    # -----------------------------------------------------------------
+    # TAB 3: QUẢN LÝ ĐỀ (GỘP KHO ĐỀ THI ĐÃ SOẠN & BẢNG ĐIỂM / GIÁM SÁT / THỐNG KÊ)
+    # -----------------------------------------------------------------
+    with t_manage:
+        sub_mgr_list, sub_mgr_res = st.tabs([
+            "📚 Kho đề thi",
+            "📊 Điểm & Giám sát"
+        ])
+
+        with sub_mgr_list:
+            st.subheader("📚 Danh sách Đề thi đã soạn (Tải LaTeX .tex, Sửa phương án, Đổi câu hỏi & Mở lời giải)")
+            exams_data = supabase.table("exams").select("*").order("grade", desc=True).order("chapter").order("id", desc=True).execute().data
+            if not exams_data:
+                st.info("Chưa có đề thi nào trong hệ thống.")
+            else:
+                grouped_exams = {}
+                for ex in exams_data:
+                    g = ex.get("grade") or "12"
+                    ch = ex.get("chapter") or "Chương chung"
+                    grouped_exams.setdefault(g, {}).setdefault(ch, []).append(ex)
+
+                for g, chaps in grouped_exams.items():
+                    with st.expander(f"📁 KHỐI {g} ({sum(len(v) for v in chaps.values())} đề thi)", expanded=True):
+                        for ch, ex_list in chaps.items():
+                            st.markdown(f"##### 📌 {ch}")
+                            for ex in ex_list:
+                                ex_qs = ex.get("questions", [])
+                                c1, c2, c3, c4, c5 = st.columns([3.2, 1.5, 1.5, 1.6, 1.2])
+                                c1.write(f"**#{ex['id']} - {ex['title']}** ({ex['duration']}p — {len(ex_qs)} câu)")
+                                show_sol = c2.toggle("Mở lời giải", value=ex["show_solutions"], key=f"sol_{ex['id']}")
+                                is_act = c3.toggle("Mở phòng thi", value=ex["is_active"], key=f"act_{ex['id']}")
+                                if show_sol != ex["show_solutions"] or is_act != ex["is_active"]:
+                                    supabase.table("exams").update({"show_solutions": show_sol, "is_active": is_act}).eq("id", ex["id"]).execute()
+                                    st.rerun()
+                                c4.download_button(
+                                    "📥 Tải .tex",
+                                    build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
+                                    f"de_thi_{ex['id']}.tex",
+                                    "text/plain",
+                                    key=f"dl_tex_ex_{ex['id']}",
+                                    use_container_width=True
+                                )
+                                if c5.button("🗑️ Xóa đề", key=f"del_{ex['id']}", use_container_width=True):
+                                    supabase.table("exams").delete().eq("id", ex["id"]).execute()
+                                    st.rerun()
+
+                                with st.expander(f"👁️ Xem toàn bộ đề, Tải LaTeX, Sửa phương án & Đổi câu hỏi của đề #{ex['id']} - {ex['title']}"):
+                                    ex_dl1, ex_dl2 = st.columns(2)
+                                    ex_dl1.download_button(
+                                        "📄 Tải file .tex (Chỉ gồm các khối \\begin{ex}...\\end{ex})",
+                                        build_latex_export_content(ex_qs, title=ex["title"], full_document=False).encode("utf-8"),
+                                        f"de_{ex['id']}_ex_blocks.tex",
+                                        "text/plain",
+                                        key=f"dl_blk_{ex['id']}",
+                                        use_container_width=True
+                                    )
+                                    ex_dl2.download_button(
+                                        "📘 Tải file .tex hoàn chỉnh (Đủ \\documentclass biên dịch ngay)",
+                                        build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
+                                        f"de_{ex['id']}_full_doc.tex",
+                                        "text/plain",
+                                        key=f"dl_full_{ex['id']}",
+                                        use_container_width=True
+                                    )
+                                    st.divider()
+                                    for q_idx, q_item in enumerate(ex_qs):
+                                        ec1, ec2 = st.columns([5.8, 1.2])
+                                        with ec1:
+                                            render_question_card(q_item, f"Câu {q_idx + 1}")
+                                        with ec2:
+                                            if st.button("🔄 Đổi câu khác", key=f"swap_pub_{ex['id']}_{q_idx}", use_container_width=True):
+                                                rep_q = find_replacement_question(q_item, ex_qs)
+                                                if rep_q:
+                                                    ex_qs[q_idx] = rep_q
+                                                    supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                    st.toast(f"✅ Đã đổi Câu {q_idx + 1} trong đề #{ex['id']}!")
+                                                    st.rerun()
+                                                else:
+                                                    st.warning("Không tìm thấy câu hỏi khác cùng Bài/Mức độ trong Ngân hàng!")
+                                            if st.button("🗑️ Xóa câu", key=f"del_q_pub_{ex['id']}_{q_idx}", use_container_width=True):
+                                                ex_qs.pop(q_idx)
+                                                for r_i, r_q in enumerate(ex_qs):
+                                                    r_q["id"] = f"q_{r_i + 1}"
+                                                supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                st.rerun()
+
+                                        pub_uid = f"pub_{ex['id']}_{q_idx}_{q_item.get('question_hash', '')[:6]}"
+                                        with st.expander(f"✏️ Sửa nội dung & các phương án Câu {q_idx + 1} của đề #{ex['id']}"):
+                                            p_tag, p_stem, p_opts, p_stmts, p_sa, p_sol = render_question_edit_controls(q_item, pub_uid)
+                                            if st.button("💾 Lưu sửa câu này vào Đề thi", key=f"save_pub_{pub_uid}", type="primary"):
+                                                ex_qs[q_idx] = apply_quick_edit_to_question(
+                                                    q_item, p_tag, p_stem, p_sol, new_short_ans=p_sa, new_options=p_opts, new_statements=p_stmts
+                                                )
+                                                supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                st.success(f"Đã cập nhật Câu {q_idx + 1} trong đề #{ex['id']}!")
+                                                st.rerun()
+                                        st.divider()
+
+        with sub_mgr_res:
+            exams_list = supabase.table("exams").select("*").order("id", desc=True).execute().data
+            if not exams_list:
+                st.info("Chưa có đề thi nào.")
+            else:
+                selected_exam = st.selectbox(
+                    "📌 Chọn đề thi để xem bảng điểm, thống kê & giám sát:",
+                    exams_list,
+                    format_func=lambda x: f"[Khối {x.get('grade','12')} - {x.get('chapter','')}] #{x['id']} - {x['title']}"
+                )
+                subs = supabase.table("submissions").select("*, students(full_name, class_name)").eq("exam_id", selected_exam["id"]).execute().data
+
+                if not subs:
+                    st.warning("Chưa có học sinh nào làm đề này.")
+                else:
+                    item_stats = analyze_exam_items(selected_exam["questions"], subs)
+
+                    xlsx_report_bytes = build_exam_report_xlsx(selected_exam, subs, item_stats)
+                    st.download_button(
+                        "📥 TẢI TOÀN BỘ DỮ LIỆU BÀI THI & HÌNH ẢNH CAMERA RA FILE EXCEL (.XLSX)",
+                        xlsx_report_bytes,
+                        f"bao_cao_ket_qua_va_anh_camera_de_{selected_exam['id']}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                    sub_tab1, sub_tab2, sub_tab3 = st.tabs([
+                        "📋 Bảng điểm",
+                        "📉 Thống kê sai",
+                        "📷 Giám sát thi"
+                    ])
+
+                    with sub_tab1:
+                        rows = []
+                        for s in subs:
+                            stu_info = s.get("students") or {}
+                            dur_str, st_time_str, sub_time_str = format_duration_vn(s.get("started_at"), s.get("submitted_at"))
+                            rows.append({
+                                "Tài khoản": s["username"],
+                                "Họ tên": stu_info.get("full_name", ""),
+                                "Lớp": stu_info.get("class_name", ""),
+                                "Trạng thái": "Đã nộp" if s["status"] == "submitted" else "Đang làm",
+                                "Điểm số": s["score"],
+                                "Bắt đầu lúc": st_time_str,
+                                "Nộp bài lúc": sub_time_str,
+                                "Thời gian làm bài": dur_str,
+                                "Số lần rời màn hình": s["tab_switches"],
+                                "Số ảnh Camera": len(s.get("snapshots") or [])
+                            })
+                        df_res = pd.DataFrame(rows)
+                        st.dataframe(df_res, use_container_width=True, hide_index=True)
+
+                    with sub_tab2:
+                        st.subheader("📉 Xếp hạng các câu hỏi học sinh làm sai nhiều nhất")
+                        if not item_stats:
+                            st.info("Chưa có bài làm nào ở trạng thái 'Đã nộp' để thống kê.")
+                        else:
+                            df_stats = pd.DataFrame(item_stats).drop(columns=["q_obj"])
+                            st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
+                            st.markdown("#### 🔍 Xem chi tiết đề bài & lời giải các câu học sinh hay sai:")
+                            for st_row in item_stats:
+                                q_obj = st_row["q_obj"]
+                                w_rate = st_row["Tỷ lệ sai (%)"]
+                                badge_color = "🔴" if w_rate >= 50 else ("🟠" if w_rate >= 25 else "🟢")
+                                with st.expander(
+                                    f"{badge_color} {st_row['Câu gốc']} ({st_row['Phần']}) — Tỷ lệ sai: {w_rate}% "
+                                    f"({st_row['Số HS sai / Tổng']}) | [{st_row['Mã ID']}] {st_row['Bài học']}"
+                                ):
+                                    st.info(f"📊 **Phân tích phương án học sinh đã chọn:** {st_row['Chi tiết phân bố đáp án']}")
+                                    render_question_card(q_obj, st_row["Câu gốc"])
+
+                    with sub_tab3:
+                        chosen_sub = st.selectbox(
+                            "Chọn học sinh cần kiểm tra",
+                            subs,
+                            format_func=lambda x: f"{x['username']} - {(x.get('students') or {}).get('full_name', '')} (Lớp {(x.get('students') or {}).get('class_name', '')} | Rời màn hình: {x['tab_switches']} lần)"
+                        )
+                        if chosen_sub:
+                            dur_s, st_s, sub_s = format_duration_vn(chosen_sub.get("started_at"), chosen_sub.get("submitted_at"))
+                            st.write(f"⏱️ **Bắt đầu:** `{st_s}` | **Nộp bài:** `{sub_s}` | **Thời gian làm bài:** `{dur_s}`")
+
+                            new_total_score = st.number_input("Cập nhật tổng điểm (nếu cộng thêm điểm Tự luận trên giấy):", 0.0, 20.0, float(chosen_sub.get("score") or 0.0), 0.25)
+                            if st.button("💾 Lưu tổng điểm mới"):
+                                supabase.table("submissions").update({"score": new_total_score}).eq("id", chosen_sub["id"]).execute()
+                                st.success("Đã cập nhật điểm số!")
                                 st.rerun()
 
-                            with st.expander(f"👁️ Xem toàn bộ đề, Tải LaTeX, Sửa phương án & Đổi câu hỏi của đề #{ex['id']} - {ex['title']}"):
-                                ex_dl1, ex_dl2 = st.columns(2)
-                                ex_dl1.download_button(
-                                    "📄 Tải file .tex (Chỉ gồm các khối \\begin{ex}...\\end{ex})",
-                                    build_latex_export_content(ex_qs, title=ex["title"], full_document=False).encode("utf-8"),
-                                    f"de_{ex['id']}_ex_blocks.tex",
-                                    "text/plain",
-                                    key=f"dl_blk_{ex['id']}",
-                                    use_container_width=True
-                                )
-                                ex_dl2.download_button(
-                                    "📘 Tải file .tex hoàn chỉnh (Đủ \\documentclass biên dịch ngay)",
-                                    build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
-                                    f"de_{ex['id']}_full_doc.tex",
-                                    "text/plain",
-                                    key=f"dl_full_{ex['id']}",
-                                    use_container_width=True
-                                )
-                                st.divider()
-                                for q_idx, q_item in enumerate(ex_qs):
-                                    ec1, ec2 = st.columns([5.8, 1.2])
-                                    with ec1:
-                                        render_question_card(q_item, f"Câu {q_idx + 1}")
-                                    with ec2:
-                                        if st.button("🔄 Đổi câu khác", key=f"swap_pub_{ex['id']}_{q_idx}", use_container_width=True):
-                                            rep_q = find_replacement_question(q_item, ex_qs)
-                                            if rep_q:
-                                                ex_qs[q_idx] = rep_q
-                                                supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                                st.toast(f"✅ Đã đổi Câu {q_idx + 1} trong đề #{ex['id']}!")
-                                                st.rerun()
-                                            else:
-                                                st.warning("Không tìm thấy câu hỏi khác cùng Bài/Mức độ trong Ngân hàng!")
-                                        if st.button("🗑️ Xóa câu", key=f"del_q_pub_{ex['id']}_{q_idx}", use_container_width=True):
-                                            ex_qs.pop(q_idx)
-                                            for r_i, r_q in enumerate(ex_qs):
-                                                r_q["id"] = f"q_{r_i + 1}"
-                                            supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                            st.rerun()
+                            if st.button("🔄 Xóa lượt làm bài này (Cho phép học sinh thi lại)"):
+                                supabase.table("submissions").delete().eq("id", chosen_sub["id"]).execute()
+                                st.success("Đã xóa lượt làm bài! Học sinh có thể vào thi lại.")
+                                st.rerun()
 
-                                    pub_uid = f"pub_{ex['id']}_{q_idx}_{q_item.get('question_hash', '')[:6]}"
-                                    with st.expander(f"✏️ Sửa nội dung & các phương án Câu {q_idx + 1} của đề #{ex['id']}"):
-                                        p_tag, p_stem, p_opts, p_stmts, p_sa, p_sol = render_question_edit_controls(q_item, pub_uid)
-                                        if st.button("💾 Lưu sửa câu này vào Đề thi", key=f"save_pub_{pub_uid}", type="primary"):
-                                            ex_qs[q_idx] = apply_quick_edit_to_question(
-                                                q_item, p_tag, p_stem, p_sol, new_short_ans=p_sa, new_options=p_opts, new_statements=p_stmts
-                                            )
-                                            supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                            st.success(f"Đã cập nhật Câu {q_idx + 1} trong đề #{ex['id']}!")
-                                            st.rerun()
-                                    st.divider()
+                            snaps = chosen_sub.get("snapshots") or []
+                            if not snaps:
+                                st.info("Học sinh này chưa có ảnh chụp camera nào.")
+                            else:
+                                cols = st.columns(4)
+                                for i, snap in enumerate(snaps):
+                                    with cols[i % 4]:
+                                        st.image(snap["img"], caption=f"Lúc: {snap['time']}")
 
     # -----------------------------------------------------------------
-    # TAB 4: QUẢN LÝ HỌC SINH THEO LỚP (THÊM THỦ CÔNG, NHẬP EXCEL, TÍCH CHỌN XÓA NHANH & XÓA CẢ LỚP)
+    # TAB 4: QUẢN LÝ HỌC SINH (THÊM THỦ CÔNG, NHẬP EXCEL, NÚT CHỌN CẢ LỚP & XÓA NHANH)
     # -----------------------------------------------------------------
     with t_stu:
-        st.subheader("1. Thêm Học sinh theo Lớp (Nhập file Excel .xlsx hoặc Thêm nhanh thủ công)")
+        st.subheader("1. Thêm Học sinh vào Lớp")
 
         add_tab_excel, add_tab_manual = st.tabs([
-            "📥 Cách 1: Nhập danh sách từ file Excel (.xlsx)",
-            "✍️ Cách 2: Thêm nhanh 1 hoặc nhiều học sinh trực tiếp vào Lớp"
+            "📥 Nhập từ Excel",
+            "✍️ Thêm thủ công"
         ])
 
         with add_tab_excel:
-            st.info("💡 Khuyến nghị sử dụng **file Excel (`.xlsx`)** gồm 4 cột: `Họ tên`, `Lớp` (VD: 12A1, 10A2), `Tài khoản`, `Mật khẩu` để không bao giờ bị lỗi font tiếng Việt.")
+            st.info("💡 Khuyến nghị sử dụng **file Excel (`.xlsx`)** gồm 4 cột: `Họ tên`, `Lớp` (VD: 12A1, 10A2), `Tài khoản`, `Mật khẩu` để không bị lỗi font tiếng Việt.")
             sample_df = pd.DataFrame([
                 {"Họ tên": "Nguyễn Văn An", "Lớp": "12A1", "Tài khoản": "12a1_01", "Mật khẩu": "123"},
                 {"Họ tên": "Trần Thị Bình", "Lớp": "12A1", "Tài khoản": "12a1_02", "Mật khẩu": "123"},
@@ -2421,7 +2587,7 @@ if st.session_state.role == "teacher":
                     st.rerun()
 
         st.divider()
-        st.subheader("2. Quản lý, Sửa thông tin, Tích chọn xóa nhanh hoặc Xóa cả Lớp")
+        st.subheader("2. Danh sách Học sinh theo từng Lớp (Chọn cả lớp, Sửa hoặc Xóa nhanh)")
         all_stu = supabase.table("students").select("*").order("class_name").order("username").execute().data
         if not all_stu:
             st.info("Chưa có học sinh nào trong hệ thống.")
@@ -2432,10 +2598,13 @@ if st.session_state.role == "teacher":
             for cls_name in classes:
                 cls_students = [s for s in all_stu if s["class_name"] == cls_name]
                 with st.expander(f"🏫 Lớp {cls_name} — Sĩ số: {len(cls_students)} học sinh (Khối {extract_grade_from_class(cls_name)})", expanded=False):
+                    # Nút Chọn cả lớp -> tự động tick hết toàn bộ học sinh trong bảng của lớp đó
+                    tick_all_cls = st.checkbox(f"☑️ Chọn cả lớp {cls_name} (Tích chọn toàn bộ {len(cls_students)} học sinh)", key=f"chk_all_stu_{cls_name}")
+
                     stu_rows = []
                     for idx_s, s_obj in enumerate(cls_students):
                         stu_rows.append({
-                            "Chọn xóa": False,
+                            "Chọn xóa": bool(tick_all_cls),
                             "STT": idx_s + 1,
                             "Tài khoản": s_obj["username"],
                             "Họ và tên": s_obj["full_name"],
@@ -2447,11 +2616,11 @@ if st.session_state.role == "teacher":
                         use_container_width=True,
                         hide_index=True,
                         disabled=["STT", "Tài khoản"],
-                        key=f"stu_editor_{cls_name}"
+                        key=f"stu_editor_{cls_name}_{int(tick_all_cls)}"
                     )
 
-                    act_c1, act_c2, act_c3 = st.columns([2.2, 1.8, 2])
-                    if act_c1.button(f"🛠️ Lưu sửa thông tin & 🗑️ Xóa học sinh đã tích chọn ({cls_name})", key=f"btn_batch_stu_{cls_name}", type="primary", use_container_width=True):
+                    act_c1, act_c2 = st.columns([3, 1.5])
+                    if act_c1.button(f"🛠️ Lưu chỉnh sửa & 🗑️ Xóa các học sinh đã tích chọn ({cls_name})", key=f"btn_batch_stu_{cls_name}", type="primary", use_container_width=True):
                         to_delete_users = []
                         to_update_records = []
                         for _, r_stu in edited_stu_df.iterrows():
@@ -2468,6 +2637,8 @@ if st.session_state.role == "teacher":
                             supabase.table("students").delete().in_("username", to_delete_users).execute()
                         if to_update_records:
                             supabase.table("students").upsert(to_update_records, on_conflict="username").execute()
+                        if f"chk_all_stu_{cls_name}" in st.session_state:
+                            st.session_state[f"chk_all_stu_{cls_name}"] = False
                         st.success(f"✅ Đã xóa {len(to_delete_users)} học sinh và cập nhật danh sách lớp {cls_name}!")
                         st.rerun()
 
@@ -2482,120 +2653,6 @@ if st.session_state.role == "teacher":
                         key=f"dl_cls_{cls_name}",
                         use_container_width=True
                     )
-
-                    with act_c3:
-                        confirm_del_cls = st.checkbox(f"Xác nhận xóa cả lớp {cls_name}", key=f"chk_del_cls_{cls_name}")
-                        if st.button(f"🔥 Xóa toàn bộ Lớp {cls_name}", key=f"btn_wipe_cls_{cls_name}", disabled=not confirm_del_cls, use_container_width=True):
-                            supabase.table("students").delete().eq("class_name", cls_name).execute()
-                            st.success(f"Đã xóa toàn bộ học sinh lớp {cls_name}!")
-                            st.rerun()
-
-    # -----------------------------------------------------------------
-    # TAB 5: BẢNG ĐIỂM, THỜI GIAN LÀM BÀI, XUẤT EXCEL KÈM ẢNH CAMERA & THỐNG KÊ CÂU SAI
-    # -----------------------------------------------------------------
-    with t_res:
-        exams_list = supabase.table("exams").select("*").order("id", desc=True).execute().data
-        if not exams_list:
-            st.info("Chưa có đề thi nào.")
-        else:
-            selected_exam = st.selectbox(
-                "📌 Chọn đề thi để xem báo cáo",
-                exams_list,
-                format_func=lambda x: f"[Khối {x.get('grade','12')} - {x.get('chapter','')}] #{x['id']} - {x['title']}"
-            )
-            subs = supabase.table("submissions").select("*, students(full_name, class_name)").eq("exam_id", selected_exam["id"]).execute().data
-
-            if not subs:
-                st.warning("Chưa có học sinh nào làm đề này.")
-            else:
-                item_stats = analyze_exam_items(selected_exam["questions"], subs)
-
-                # Nút xuất báo cáo tổng hợp Excel (.xlsx) có nhúng cả hình ảnh Camera giám sát
-                xlsx_report_bytes = build_exam_report_xlsx(selected_exam, subs, item_stats)
-                st.download_button(
-                    "📥 TẢI TOÀN BỘ DỮ LIỆU BÀI THI & HÌNH ẢNH CAMERA RA FILE EXCEL (.XLSX)",
-                    xlsx_report_bytes,
-                    f"bao_cao_ket_qua_va_anh_camera_de_{selected_exam['id']}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True
-                )
-
-                sub_tab1, sub_tab2, sub_tab3 = st.tabs([
-                    "📋 1. Bảng điểm & Thời gian làm bài",
-                    "📉 2. Thống kê tỷ lệ làm sai từng câu (Item Analysis)",
-                    "📷 3. Giám sát Camera & Cho phép thi lại"
-                ])
-
-                with sub_tab1:
-                    rows = []
-                    for s in subs:
-                        stu_info = s.get("students") or {}
-                        dur_str, st_time_str, sub_time_str = format_duration_vn(s.get("started_at"), s.get("submitted_at"))
-                        rows.append({
-                            "Tài khoản": s["username"],
-                            "Họ tên": stu_info.get("full_name", ""),
-                            "Lớp": stu_info.get("class_name", ""),
-                            "Trạng thái": "Đã nộp" if s["status"] == "submitted" else "Đang làm",
-                            "Điểm số": s["score"],
-                            "Bắt đầu lúc": st_time_str,
-                            "Nộp bài lúc": sub_time_str,
-                            "Thời gian làm bài": dur_str,
-                            "Số lần rời màn hình": s["tab_switches"],
-                            "Số ảnh Camera": len(s.get("snapshots") or [])
-                        })
-                    df_res = pd.DataFrame(rows)
-                    st.dataframe(df_res, use_container_width=True, hide_index=True)
-
-                with sub_tab2:
-                    st.subheader("📉 Xếp hạng các câu hỏi học sinh làm sai nhiều nhất")
-                    if not item_stats:
-                        st.info("Chưa có bài làm nào ở trạng thái 'Đã nộp' để thống kê.")
-                    else:
-                        df_stats = pd.DataFrame(item_stats).drop(columns=["q_obj"])
-                        st.dataframe(df_stats, use_container_width=True, hide_index=True)
-
-                        st.markdown("#### 🔍 Xem chi tiết đề bài & lời giải các câu học sinh hay sai:")
-                        for st_row in item_stats:
-                            q_obj = st_row["q_obj"]
-                            w_rate = st_row["Tỷ lệ sai (%)"]
-                            badge_color = "🔴" if w_rate >= 50 else ("🟠" if w_rate >= 25 else "🟢")
-                            with st.expander(
-                                f"{badge_color} {st_row['Câu gốc']} ({st_row['Phần']}) — Tỷ lệ sai: {w_rate}% "
-                                f"({st_row['Số HS sai / Tổng']}) | [{st_row['Mã ID']}] {st_row['Bài học']}"
-                            ):
-                                st.info(f"📊 **Phân tích phương án học sinh đã chọn:** {st_row['Chi tiết phân bố đáp án']}")
-                                render_question_card(q_obj, st_row["Câu gốc"])
-
-                with sub_tab3:
-                    chosen_sub = st.selectbox(
-                        "Chọn học sinh cần kiểm tra",
-                        subs,
-                        format_func=lambda x: f"{x['username']} - {(x.get('students') or {}).get('full_name', '')} (Lớp {(x.get('students') or {}).get('class_name', '')} | Rời màn hình: {x['tab_switches']} lần)"
-                    )
-                    if chosen_sub:
-                        dur_s, st_s, sub_s = format_duration_vn(chosen_sub.get("started_at"), chosen_sub.get("submitted_at"))
-                        st.write(f"⏱️ **Bắt đầu:** `{st_s}` | **Nộp bài:** `{sub_s}` | **Thời gian làm bài:** `{dur_s}`")
-
-                        new_total_score = st.number_input("Cập nhật tổng điểm (nếu cộng thêm điểm Tự luận trên giấy):", 0.0, 20.0, float(chosen_sub.get("score") or 0.0), 0.25)
-                        if st.button("💾 Lưu tổng điểm mới"):
-                            supabase.table("submissions").update({"score": new_total_score}).eq("id", chosen_sub["id"]).execute()
-                            st.success("Đã cập nhật điểm số!")
-                            st.rerun()
-
-                        if st.button("🔄 Xóa lượt làm bài này (Cho phép học sinh thi lại)"):
-                            supabase.table("submissions").delete().eq("id", chosen_sub["id"]).execute()
-                            st.success("Đã xóa lượt làm bài! Học sinh có thể vào thi lại.")
-                            st.rerun()
-
-                        snaps = chosen_sub.get("snapshots") or []
-                        if not snaps:
-                            st.info("Học sinh này chưa có ảnh chụp camera nào.")
-                        else:
-                            cols = st.columns(4)
-                            for i, snap in enumerate(snaps):
-                                with cols[i % 4]:
-                                    st.image(snap["img"], caption=f"Lúc: {snap['time']}")
 
 # =====================================================================
 # PHÂN HỆ 2: GIAO DIỆN HỌC SINH LÀM BÀI (HIỆN ĐẠI & TRỰC QUAN)
@@ -2687,7 +2744,7 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
 
                     opts = q["shuffled_options"]
                     labels = ["A", "B", "C", "D"]
@@ -2715,14 +2772,15 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
 
                     st_labels = ["a)", "b)", "c)", "d)"]
                     for s_idx, st_item in enumerate(q["statements"]):
                         sid = f"{qid}_s{st_item['id']}"
                         with st.container(border=True):
                             c_text, c_radio = st.columns([4.5, 1.5])
-                            c_text.markdown(f'<div class="q-content-area"><b>{st_labels[s_idx]}</b> {st_item["text"]}</div>', unsafe_allow_html=True)
+                            # Dùng Markdown thuần để KaTeX/MathJax luôn dịch công thức toán ở các ý a), b), c), d)
+                            c_text.markdown(f"**{st_labels[s_idx]}** {st_item['text']}", unsafe_allow_html=True)
                             prev_val = current_answers.get(sid)
                             r_idx = ["Đúng", "Sai"].index(prev_val) if prev_val in ["Đúng", "Sai"] else None
                             val = c_radio.radio(
@@ -2741,10 +2799,7 @@ elif st.session_state.role == "student":
                 f'<div class="section-banner-p3">📌 PHẦN III. Câu trắc nghiệm trả lời ngắn ({scoring_cfg.get("p3", 0.5)} điểm/câu)</div>',
                 unsafe_allow_html=True
             )
-            st.info(
-                "💡 **Hướng dẫn điền đáp số Trả lời ngắn (4 ô vuông):** Điền lần lượt từ **trái sang phải** (mỗi ô 1 ký tự, không bắt buộc điền đủ 4 ô). "
-                "**Ô 1:** chỉ điền `- 0 1 2 3 4 5 6 7 8 9` | **Ô 2, Ô 3:** chỉ điền `, 0 1 2 3 4 5 6 7 8 9` | **Ô 4:** chỉ điền `0 1 2 3 4 5 6 7 8 9`."
-            )
+            st.info("💡 **Hướng dẫn:** Điền đáp số lần lượt từ trái sang phải.")
             allowed_box1 = set("-0123456789")
             allowed_box23 = set(",0123456789")
             allowed_box4 = set("0123456789")
@@ -2753,7 +2808,7 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#d97706,#b45309);">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
 
                     prev_short = str(current_answers.get(qid, ""))
                     d1 = prev_short[0] if len(prev_short) >= 1 else ""
@@ -2761,29 +2816,27 @@ elif st.session_state.role == "student":
                     d3 = prev_short[2] if len(prev_short) >= 3 else ""
                     d4 = prev_short[3] if len(prev_short) >= 4 else ""
 
-                    st.markdown("**🎯 Điền đáp số vào các ô từ trái sang phải:**")
-                    bc1, bc2, bc3, bc4, bc_info = st.columns([0.8, 0.8, 0.8, 0.8, 4.8])
-                    b1 = bc1.text_input("Ô 1", value=d1, max_chars=1, key=f"sa_b1_{qid}", placeholder="Ô 1")
-                    b2 = bc2.text_input("Ô 2", value=d2, max_chars=1, key=f"sa_b2_{qid}", placeholder="Ô 2")
-                    b3 = bc3.text_input("Ô 3", value=d3, max_chars=1, key=f"sa_b3_{qid}", placeholder="Ô 3")
-                    b4 = bc4.text_input("Ô 4", value=d4, max_chars=1, key=f"sa_b4_{qid}", placeholder="Ô 4")
+                    # 4 ô vuông sát nhau, ẩn toàn bộ chữ Ô 1, Ô 2, Ô 3, Ô 4
+                    bc1, bc2, bc3, bc4, bc_info = st.columns([0.52, 0.52, 0.52, 0.52, 5.92], gap="small")
+                    b1 = bc1.text_input("b1", value=d1, max_chars=1, key=f"sa_b1_{qid}", placeholder="", label_visibility="collapsed")
+                    b2 = bc2.text_input("b2", value=d2, max_chars=1, key=f"sa_b2_{qid}", placeholder="", label_visibility="collapsed")
+                    b3 = bc3.text_input("b3", value=d3, max_chars=1, key=f"sa_b3_{qid}", placeholder="", label_visibility="collapsed")
+                    b4 = bc4.text_input("b4", value=d4, max_chars=1, key=f"sa_b4_{qid}", placeholder="", label_visibility="collapsed")
 
                     b1, b2, b3, b4 = b1.strip(), b2.strip(), b3.strip(), b4.strip()
                     box_errors = []
 
-                    # Kiểm tra quy tắc điền từ trái sang phải (ô trước trống thì không được điền ô sau)
                     if (b1 == "" and (b2 != "" or b3 != "" or b4 != "")) or (b2 == "" and (b3 != "" or b4 != "")) or (b3 == "" and b4 != ""):
-                        box_errors.append("⚠️ Em phải điền lần lượt từ trái qua phải! Không được bỏ trống ô phía trước mà điền ô phía sau.")
+                        box_errors.append("⚠️ Vui lòng điền lần lượt từ trái sang phải (không bỏ trống ô phía trước)!")
 
-                    # Kiểm tra tập ký tự hợp lệ của từng ô
                     if b1 != "" and b1 not in allowed_box1:
-                        box_errors.append(f"⚠️ Ô thứ 1 không hợp lệ ('{b1}'): Chỉ được điền dấu trừ (-) hoặc chữ số (0 1 2 3 4 5 6 7 8 9).")
+                        box_errors.append(f"⚠️ Ô thứ 1 chỉ được điền dấu '-' hoặc chữ số (0-9).")
                     if b2 != "" and b2 not in allowed_box23:
-                        box_errors.append(f"⚠️ Ô thứ 2 không hợp lệ ('{b2}'): Chỉ được điền dấu phẩy (,) hoặc chữ số (0 1 2 3 4 5 6 7 8 9).")
+                        box_errors.append(f"⚠️ Ô thứ 2 chỉ được điền dấu ',' hoặc chữ số (0-9).")
                     if b3 != "" and b3 not in allowed_box23:
-                        box_errors.append(f"⚠️ Ô thứ 3 không hợp lệ ('{b3}'): Chỉ được điền dấu phẩy (,) hoặc chữ số (0 1 2 3 4 5 6 7 8 9).")
+                        box_errors.append(f"⚠️ Ô thứ 3 chỉ được điền dấu ',' hoặc chữ số (0-9).")
                     if b4 != "" and b4 not in allowed_box4:
-                        box_errors.append(f"⚠️ Ô thứ 4 không hợp lệ ('{b4}'): Chỉ được điền chữ số (0 1 2 3 4 5 6 7 8 9).")
+                        box_errors.append(f"⚠️ Ô thứ 4 chỉ được điền chữ số (0-9).")
                     if b2 == "," and b3 == ",":
                         box_errors.append("⚠️ Không được điền 2 dấu phẩy (,) trong cùng một đáp số!")
 
@@ -2795,9 +2848,7 @@ elif st.session_state.role == "student":
                             combined_ans = b1 + b2 + b3 + b4
                             current_answers[qid] = combined_ans
                             if combined_ans:
-                                st.markdown(f"<div style='padding-top:28px;color:#065f46;font-weight:700;font-size:17px;'>✅ Đáp số đã ghi nhận: <code style='font-size:19px;'>{combined_ans}</code></div>", unsafe_allow_html=True)
-                            else:
-                                st.markdown("<div style='padding-top:28px;color:#64748b;font-size:14px;'>*(Chưa điền đáp số)*</div>", unsafe_allow_html=True)
+                                st.markdown(f"<div style='padding-top:12px;color:#065f46;font-weight:700;font-size:18px;'>✅ Đáp số: <code style='font-size:20px;'>{combined_ans}</code></div>", unsafe_allow_html=True)
 
         if p4:
             st.markdown(
@@ -2807,7 +2858,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p4):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#059669,#047857);">Bài {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
                     st.markdown(
                         '<div class="essay-notice-box">✍️ Làm vào tập hoặc giấy đôi theo lời dặn từ giáo viên trên lớp</div>',
                         unsafe_allow_html=True
@@ -2863,42 +2914,43 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p1):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge">Phần I - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
                     user_c = str(saved_answers.get(q["id"]))
                     for opt in q["shuffled_options"]:
                         is_u = (str(opt["id"]) == user_c)
                         badge = " 👈 *(Bạn chọn)*" if is_u else ""
                         icon = "✅" if opt["is_true"] else ("❌" if is_u else "⚪")
-                        st.markdown(f'<div class="q-content-area">{icon} {opt["text"]}{badge}</div>', unsafe_allow_html=True)
+                        st.markdown(f"{icon} {opt['text']}{badge}", unsafe_allow_html=True)
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**<br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p2):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#6d28d9;">Phần II - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
-                    for st_i in q["statements"]:
+                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st_labels = ["a)", "b)", "c)", "d)"]
+                    for s_idx, st_i in enumerate(q["statements"]):
                         sid = f"{q['id']}_s{st_i['id']}"
                         u_tf = saved_answers.get(sid, "Chưa chọn")
                         corr_tf = "Đúng" if st_i["is_true"] else "Sai"
                         icon = "✅" if u_tf == corr_tf else "❌"
-                        st.markdown(f'<div class="q-content-area">{icon} {st_i["text"]} — <b>Đáp án: {corr_tf}</b> <i>(Bạn chọn: {u_tf})</i></div>', unsafe_allow_html=True)
+                        st.markdown(f"{icon} **{st_labels[s_idx]}** {st_i['text']} — **Đáp án: {corr_tf}** *(Bạn chọn: {u_tf})*", unsafe_allow_html=True)
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**<br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p3):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#d97706;">Phần III - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
                     u_sa = saved_answers.get(q["id"], "Chưa điền")
                     st.write(f"🔑 **Đáp số đúng:** `{q['short_ans']}` | **Bạn điền:** `{u_sa}`")
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**<br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
 
             for idx, q in enumerate(p4):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#047857;">Phần IV (Tự luận) - Bài {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="q-content-area">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
+                    st.markdown(q["stem"], unsafe_allow_html=True)
                     st.markdown('<div class="essay-notice-box">✍️ Làm vào tập hoặc giấy đôi theo lời dặn từ giáo viên trên lớp</div>', unsafe_allow_html=True)
                     if q.get("solution"):
-                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chuẩn:**<br>\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chuẩn:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
