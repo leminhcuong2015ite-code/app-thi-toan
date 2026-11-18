@@ -303,40 +303,114 @@ div[role="radiogroup"] > label:hover {
 }
 
 /* ÉP 4 Ô VUÔNG TRẢ LỜI NGẮN LUÔN NẰM NGANG TRÊN IPHONE & LAPTOP */
-div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) {
+div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]),
+div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]),
+div[data-testid="stElementContainer"]:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"],
+div.element-container:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"],
+div[data-testid="stElementContainer"]:has(.sa-row-marker) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] {
     display: flex !important;
     flex-direction: row !important;
     flex-wrap: nowrap !important;
     align-items: center !important;
     justify-content: flex-start !important;
     gap: 8px !important;
+    width: auto !important;
+    max-width: 100% !important;
 }
-div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) > div[data-testid="stColumn"],
-div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) > div[data-testid="column"] {
+
+div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) > div,
+div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) > div,
+div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) div[data-testid="stColumn"],
+div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) div[data-testid="stColumn"],
+div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) div[data-testid="column"],
+div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) div[data-testid="column"],
+div[data-testid="stElementContainer"]:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"] > div,
+div.element-container:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"] > div {
     width: 60px !important;
     min-width: 60px !important;
     max-width: 60px !important;
     flex: 0 0 60px !important;
+    padding: 0 !important;
 }
 
-div[data-testid="stTextInput"] input[maxlength="1"] {
+@media (max-width: 768px) {
+    div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]),
+    div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]),
+    div[data-testid="stElementContainer"]:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"],
+    div.element-container:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 8px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) > div,
+    div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) > div,
+    div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) div[data-testid="stColumn"],
+    div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) div[data-testid="stColumn"],
+    div[data-testid="stHorizontalBlock"]:has(input[aria-label^="sa_box_"]) div[data-testid="column"],
+    div[data-testid="stHorizontalBlock"]:has([class*="st-key-sa_b"]) div[data-testid="column"],
+    div[data-testid="stElementContainer"]:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"] > div,
+    div.element-container:has(.sa-row-marker) + div[data-testid="stHorizontalBlock"] > div {
+        width: 60px !important;
+        min-width: 60px !important;
+        max-width: 60px !important;
+        flex: 0 0 60px !important;
+    }
+}
+
+div[data-testid="stTextInput"]:has(input[aria-label^="sa_box_"]) div[data-baseweb="input"],
+[class*="st-key-sa_b"] div[data-baseweb="input"] {
+    width: 58px !important;
+    min-width: 58px !important;
+    max-width: 58px !important;
+    height: 56px !important;
+    background-color: #ffffff !important;
+    border: 2.5px solid #2563eb !important;
+    border-radius: 10px !important;
+    padding: 0 !important;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.14) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+div[data-testid="stTextInput"]:has(input[aria-label^="sa_box_"]) div[data-baseweb="input"]:focus-within,
+[class*="st-key-sa_b"] div[data-baseweb="input"]:focus-within {
+    border-color: #d97706 !important;
+    background-color: #fffbeb !important;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28) !important;
+}
+
+div[data-testid="stTextInput"]:has(input[aria-label^="sa_box_"]) div[data-baseweb="base-input"],
+[class*="st-key-sa_b"] div[data-baseweb="base-input"] {
+    background-color: transparent !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+div[data-testid="stTextInput"] input[aria-label^="sa_box_"],
+[class*="st-key-sa_b"] input {
     text-align: center !important;
     font-size: 22px !important;
     font-weight: 700 !important;
     color: #1e3a8a !important;
     -webkit-text-fill-color: #1e3a8a !important;
-    background-color: #ffffff !important;
-    border: 2.5px solid #2563eb !important;
-    border-radius: 10px !important;
-    width: 58px !important;
-    height: 56px !important;
-    padding: 2px !important;
-    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.14) !important;
+    background-color: transparent !important;
+    border: none !important;
+    width: 100% !important;
+    height: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    caret-color: #d97706 !important;
 }
-div[data-testid="stTextInput"] input[maxlength="1"]:focus {
-    border-color: #d97706 !important;
-    background-color: #fffbeb !important;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28) !important;
+
+div[data-testid="stTextInput"]:has(input[aria-label^="sa_box_"]) div[data-testid="InputInstructions"],
+[class*="st-key-sa_b"] div[data-testid="InputInstructions"] {
+    display: none !important;
 }
 
 .essay-notice-box {
@@ -1432,34 +1506,71 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
         }}
     }}
 
+    // Nhận diện chính xác 4 ô trả lời ngắn qua aria-label, st-key và .sa-row-marker (vì Streamlit không gắn maxlength="1" vào DOM)
+    function getShortAnsInputs(parentDoc) {{
+        let list = Array.from(parentDoc.querySelectorAll('input[aria-label^="sa_box_"], [class*="st-key-sa_b"] input'));
+        if (list.length === 0) {{
+            const markers = parentDoc.querySelectorAll('.sa-row-marker');
+            markers.forEach(m => {{
+                let el = m.parentElement;
+                while (el && el !== parentDoc.body) {{
+                    if (el.nextElementSibling) {{
+                        const found = el.nextElementSibling.querySelectorAll('input[type="text"]');
+                        if (found.length === 4) {{
+                            found.forEach(f => list.push(f));
+                            break;
+                        }}
+                    }}
+                    el = el.parentElement;
+                }}
+            }});
+        }}
+        return list;
+    }}
+
+    function isShortAnsInput(el) {{
+        if (!el || el.tagName !== "INPUT") return false;
+        const al = el.getAttribute("aria-label") || "";
+        if (al.startsWith("sa_box_")) return true;
+        if (el.getAttribute("data-sa-box") === "1") return true;
+        if (el.closest && el.closest('[class*="st-key-sa_b"]')) return true;
+        return false;
+    }}
+
     // Tự động nhảy con trỏ NGAY LẬP TỨC (synchronous) qua ô tiếp theo khi điền 1 ký tự (hỗ trợ cả iPhone iOS Safari & Laptop)
     function setupParentShortAnsListeners() {{
         try {{
             const parentDoc = window.parent.document;
-            if (!window.parent.__shortAnsDelegated) {{
-                window.parent.__shortAnsDelegated = true;
+            if (!window.parent.__shortAnsDelegatedV2) {{
+                window.parent.__shortAnsDelegatedV2 = true;
 
                 parentDoc.addEventListener("input", (e) => {{
                     const t = e.target;
-                    if (!t || t.tagName !== "INPUT" || t.getAttribute("maxlength") !== "1") return;
-                    const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+                    if (!isShortAnsInput(t)) return;
+                    const allInps = getShortAnsInputs(parentDoc);
                     const curIdx = allInps.indexOf(t);
-                    if (curIdx !== -1 && t.value && t.value.length >= 1 && (curIdx % 4) < 3) {{
-                        const nextInp = allInps[curIdx + 1];
-                        if (nextInp) {{
-                            window.parent.__targetShortBoxIdx = curIdx + 1;
-                            window.parent.__targetShortBoxTime = Date.now();
-                            // Gọi focus() đồng bộ ngay trong sự kiện input để iPhone Safari giữ bàn phím và nhảy con trỏ tức thì
-                            nextInp.focus();
-                            try {{ nextInp.setSelectionRange(0, nextInp.value.length); }} catch (err) {{}}
+                    if (curIdx !== -1 && t.value && t.value.length >= 1) {{
+                        if ((curIdx % 4) < 3) {{
+                            const nextInp = allInps[curIdx + 1];
+                            if (nextInp) {{
+                                window.parent.__targetShortBoxIdx = curIdx + 1;
+                                window.parent.__targetShortBoxTime = Date.now();
+                                // Gọi focus() đồng bộ ngay trong sự kiện input để iPhone Safari giữ bàn phím và nhảy con trỏ tức thì
+                                nextInp.focus();
+                                try {{ nextInp.setSelectionRange(0, nextInp.value.length); }} catch (err) {{}}
+                            }}
+                        }} else {{
+                            // Ô thứ 4: tự động blur để lưu đáp số ngay lập tức
+                            window.parent.__targetShortBoxIdx = undefined;
+                            t.blur();
                         }}
                     }}
                 }}, false);
 
                 parentDoc.addEventListener("keydown", (e) => {{
                     const t = e.target;
-                    if (!t || t.tagName !== "INPUT" || t.getAttribute("maxlength") !== "1") return;
-                    const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+                    if (!isShortAnsInput(t)) return;
+                    const allInps = getShortAnsInputs(parentDoc);
                     const curIdx = allInps.indexOf(t);
                     if (curIdx !== -1 && e.key === "Backspace" && (!t.value || t.value.length === 0) && (curIdx % 4) > 0) {{
                         const prevInp = allInps[curIdx - 1];
@@ -1474,20 +1585,30 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
                 }}, false);
             }}
 
-            // Ép hàng chứa 4 ô vuông luôn hiển thị ngang trên iPhone (phòng trường hợp trình duyệt cũ)
-            const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+            // Ép hàng chứa 4 ô vuông luôn hiển thị ngang trên iPhone & gắn thuộc tính chuẩn cho từng ô
+            const allInps = getShortAnsInputs(parentDoc);
             allInps.forEach(inp => {{
+                inp.setAttribute("data-sa-box", "1");
+                inp.setAttribute("maxlength", "1");
+                inp.setAttribute("autocapitalize", "off");
+                inp.setAttribute("autocomplete", "off");
+                inp.setAttribute("autocorrect", "off");
+                inp.setAttribute("spellcheck", "false");
+
                 const hBlock = inp.closest('[data-testid="stHorizontalBlock"]');
                 if (hBlock) {{
                     hBlock.style.setProperty("display", "flex", "important");
                     hBlock.style.setProperty("flex-direction", "row", "important");
                     hBlock.style.setProperty("flex-wrap", "nowrap", "important");
+                    hBlock.style.setProperty("align-items", "center", "important");
+                    hBlock.style.setProperty("justify-content", "flex-start", "important");
                     hBlock.style.setProperty("gap", "8px", "important");
                     Array.from(hBlock.children).forEach(col => {{
                         col.style.setProperty("width", "60px", "important");
                         col.style.setProperty("min-width", "60px", "important");
                         col.style.setProperty("max-width", "60px", "important");
                         col.style.setProperty("flex", "0 0 60px", "important");
+                        col.style.setProperty("padding", "0px", "important");
                     }});
                 }}
             }});
@@ -1502,7 +1623,7 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
         }} catch (err) {{}}
     }}
     setupParentShortAnsListeners();
-    setInterval(setupParentShortAnsListeners, 200);
+    setInterval(setupParentShortAnsListeners, 150);
     </script>
     """
     components.html(html_code, height=110)
@@ -2973,12 +3094,13 @@ elif st.session_state.role == "student":
                     d3 = prev_short[2] if len(prev_short) >= 3 else ""
                     d4 = prev_short[3] if len(prev_short) >= 4 else ""
 
-                    # 4 ô vuông trong 1 hàng ngang 4 cột độc lập để luôn nằm ngang trên iPhone & Laptop
+                    # Đánh dấu khối 4 ô vuông trả lời ngắn + 4 cột ngang cố định trên iPhone & Laptop
+                    st.markdown(f'<div class="sa-row-marker" data-qid="{qid}" style="display:none;"></div>', unsafe_allow_html=True)
                     bc1, bc2, bc3, bc4 = st.columns(4, gap="small")
-                    b1 = bc1.text_input("b1", value=d1, max_chars=1, key=f"sa_b1_{qid}", placeholder="", label_visibility="collapsed")
-                    b2 = bc2.text_input("b2", value=d2, max_chars=1, key=f"sa_b2_{qid}", placeholder="", label_visibility="collapsed")
-                    b3 = bc3.text_input("b3", value=d3, max_chars=1, key=f"sa_b3_{qid}", placeholder="", label_visibility="collapsed")
-                    b4 = bc4.text_input("b4", value=d4, max_chars=1, key=f"sa_b4_{qid}", placeholder="", label_visibility="collapsed")
+                    b1 = bc1.text_input("sa_box_1", value=d1, max_chars=1, key=f"sa_b1_{qid}", placeholder="", label_visibility="collapsed")
+                    b2 = bc2.text_input("sa_box_2", value=d2, max_chars=1, key=f"sa_b2_{qid}", placeholder="", label_visibility="collapsed")
+                    b3 = bc3.text_input("sa_box_3", value=d3, max_chars=1, key=f"sa_b3_{qid}", placeholder="", label_visibility="collapsed")
+                    b4 = bc4.text_input("sa_box_4", value=d4, max_chars=1, key=f"sa_b4_{qid}", placeholder="", label_visibility="collapsed")
 
                     b1, b2, b3, b4 = b1.strip(), b2.strip(), b3.strip(), b4.strip()
                     box_errors = []
