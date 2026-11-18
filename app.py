@@ -27,22 +27,116 @@ from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
 
 st.set_page_config(page_title="Hệ thống Kiểm tra Đánh giá Môn Toán - Thầy Lê Minh Cường", layout="wide", page_icon="📐")
 
-# ================= CSS GIAO DIỆN HIỆN ĐẠI, ĐỒNG BỘ CỠ CHỮ ĐỀ BÀI - PHƯƠNG ÁN - CÔNG THỨC TOÁN =================
+# ================= CSS CHỐNG LỖI DARK MODE TRÊN LAPTOP & IPHONE + CỠ CHỮ ĐỀ BÀI TO RÕ =================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
 
+:root, html, body, [data-theme="dark"], [data-theme="light"] {
+    color-scheme: light !important;
+}
+
 html, body, [class*="css"] {
     font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #0f172a !important;
 }
 
-.stApp {
-    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%) !important;
+    color: #0f172a !important;
 }
 
-/* Đồng bộ hoàn toàn cỡ chữ giữa Đề bài, Phương án ABCD, Mệnh đề Đúng/Sai và Lời giải */
+section[data-testid="stSidebar"], section[data-testid="stSidebar"] > div {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    border-right: 1px solid #cbd5e1 !important;
+}
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] div {
+    color: #0f172a !important;
+}
+
+/* Ép tất cả khung viền, expander, ô nhập liệu luôn có nền sáng và chữ đậm rõ nét ngay cả khi máy bật Dark Mode */
+div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stExpander"],
+div[data-testid="stForm"] {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+    border-radius: 12px !important;
+}
+
+div[data-testid="stExpander"] summary,
+div[data-testid="stExpander"] summary p,
+div[data-testid="stExpander"] summary span {
+    color: #0f172a !important;
+    font-weight: 600 !important;
+}
+
+/* Ép chữ câu hỏi, công thức toán KaTeX/MathJax, tiêu đề phụ, nhãn widget luôn màu tối tương phản cao */
+div[data-testid="stMarkdownContainer"],
 div[data-testid="stMarkdownContainer"] p,
 div[data-testid="stMarkdownContainer"] li,
+div[data-testid="stMarkdownContainer"] span,
+div[data-testid="stWidgetLabel"] p,
+div[data-testid="stCaptionContainer"] p,
+label[data-testid="stWidgetLabel"],
+.katex, .katex *,
+mjx-container, mjx-container * {
+    color: #0f172a !important;
+}
+
+/* Ô nhập liệu, selectbox, textarea trên iPhone (Safari Dark Mode) và Laptop */
+input, textarea, select,
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border-color: #94a3b8 !important;
+}
+
+/* Nút bấm mặc định (Secondary button) luôn có nền trắng viền rõ trên Dark Mode */
+button[kind="secondary"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1.5px solid #cbd5e1 !important;
+    font-weight: 600 !important;
+}
+button[kind="secondary"]:hover {
+    background-color: #eff6ff !important;
+    border-color: #3b82f6 !important;
+    color: #1d4ed8 !important;
+}
+button[kind="primary"] p, button[kind="primary"] span {
+    color: #ffffff !important;
+}
+
+/* Thanh Tab rõ nét trên cả nền tối */
+button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
+    color: #334155 !important;
+    font-weight: 600 !important;
+    font-size: 15.5px !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] p,
+button[data-baseweb="tab"][aria-selected="true"] span {
+    color: #1d4ed8 !important;
+    font-weight: 700 !important;
+}
+
+/* CỠ CHỮ CÂU HỎI (ĐỀ BÀI) TO RÕ HƠN (20.5px), CỠ CHỮ PHƯƠNG ÁN GIỮ NGUYÊN (18px) */
+.q-stem-text,
+.q-stem-text p,
+.q-stem-text li {
+    font-size: 20.5px !important;
+    line-height: 1.72 !important;
+    color: #0f172a !important;
+    font-weight: 500 !important;
+}
+
 .opt-box-true, .opt-box-true p, .opt-box-true span,
 .opt-box-false, .opt-box-false p, .opt-box-false span,
 .solution-box, .solution-box p, .solution-box li,
@@ -54,7 +148,6 @@ div[role="radiogroup"] div[data-testid="stMarkdownContainer"] p {
     line-height: 1.65 !important;
 }
 
-/* Cân bằng cỡ chữ Toán (KaTeX / MathJax) ngang bằng chữ tiếng Việt */
 .katex {
     font-size: 1.02em !important;
 }
@@ -63,25 +156,27 @@ mjx-container {
 }
 
 .app-header-banner {
-    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 60%, #1d4ed8 100%);
-    color: white;
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 60%, #1d4ed8 100%) !important;
+    color: #ffffff !important;
     padding: 18px 24px;
     border-radius: 16px;
-    margin-bottom: 20px;
+    margin-bottom: 18px;
     box-shadow: 0 6px 20px rgba(30, 58, 138, 0.18);
     text-align: center;
     border: 1px solid rgba(255, 255, 255, 0.15);
 }
 .app-header-banner h1 {
     color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     margin: 0 !important;
     padding: 0 !important;
-    font-size: 27px !important;
+    font-size: 26px !important;
     font-weight: 700 !important;
     letter-spacing: 0.3px;
 }
 .app-header-banner p {
     color: #fde047 !important;
+    -webkit-text-fill-color: #fde047 !important;
     margin: 6px 0 0 0 !important;
     font-size: 17.5px !important;
     font-weight: 600 !important;
@@ -89,74 +184,70 @@ mjx-container {
 }
 
 .question-card {
-    background: #ffffff;
+    background: #ffffff !important;
+    color: #0f172a !important;
     border-radius: 14px;
     padding: 18px 22px;
     margin-bottom: 16px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #cbd5e1;
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.question-card:hover {
-    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.08);
-    border-color: #cbd5e1;
 }
 
-.section-banner-p1 {
-    background: linear-gradient(90deg, #1d4ed8 0%, #3b82f6 100%);
-    color: white;
+.section-banner-p1, .section-banner-p1 * {
+    background: linear-gradient(90deg, #1d4ed8 0%, #3b82f6 100%) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     padding: 12px 20px;
     border-radius: 12px;
     font-weight: 700;
     font-size: 18px;
     margin: 20px 0 14px 0;
-    box-shadow: 0 3px 10px rgba(37, 99, 235, 0.2);
 }
-.section-banner-p2 {
-    background: linear-gradient(90deg, #6d28d9 0%, #8b5cf6 100%);
-    color: white;
+.section-banner-p2, .section-banner-p2 * {
+    background: linear-gradient(90deg, #6d28d9 0%, #8b5cf6 100%) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     padding: 12px 20px;
     border-radius: 12px;
     font-weight: 700;
     font-size: 18px;
     margin: 20px 0 14px 0;
-    box-shadow: 0 3px 10px rgba(109, 40, 217, 0.2);
 }
-.section-banner-p3 {
-    background: linear-gradient(90deg, #d97706 0%, #f59e0b 100%);
-    color: white;
+.section-banner-p3, .section-banner-p3 * {
+    background: linear-gradient(90deg, #d97706 0%, #f59e0b 100%) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     padding: 12px 20px;
     border-radius: 12px;
     font-weight: 700;
     font-size: 18px;
     margin: 20px 0 14px 0;
-    box-shadow: 0 3px 10px rgba(217, 119, 6, 0.2);
 }
-.section-banner-p4 {
-    background: linear-gradient(90deg, #047857 0%, #10b981 100%);
-    color: white;
+.section-banner-p4, .section-banner-p4 * {
+    background: linear-gradient(90deg, #047857 0%, #10b981 100%) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     padding: 12px 20px;
     border-radius: 12px;
     font-weight: 700;
     font-size: 18px;
     margin: 20px 0 14px 0;
-    box-shadow: 0 3px 10px rgba(4, 120, 87, 0.2);
 }
 
 .q-badge {
-    background: linear-gradient(135deg, #2563eb, #1d4ed8);
-    color: #ffffff;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
     padding: 5px 14px;
     border-radius: 999px;
     font-weight: 700;
     font-size: 14px;
     display: inline-block;
-    box-shadow: 0 2px 5px rgba(37, 99, 235, 0.25);
 }
 
 .tag-pill {
-    background-color: #f1f5f9;
-    color: #334155;
+    background-color: #f1f5f9 !important;
+    color: #1e293b !important;
     padding: 4px 10px;
     border-radius: 999px;
     font-size: 12px;
@@ -167,76 +258,91 @@ mjx-container {
 
 div[role="radiogroup"] > label {
     background-color: #ffffff !important;
-    border: 1.5px solid #e2e8f0 !important;
+    color: #0f172a !important;
+    border: 1.5px solid #cbd5e1 !important;
     border-radius: 10px !important;
     padding: 12px 16px !important;
     margin-bottom: 10px !important;
     width: 100%;
     transition: all 0.18s ease !important;
     cursor: pointer;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 div[role="radiogroup"] > label:hover {
     background-color: #eff6ff !important;
     border-color: #3b82f6 !important;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(59, 130, 246, 0.1);
 }
 
 .solution-box {
-    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-    border-left: 5px solid #16a34a;
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%) !important;
+    border-left: 5px solid #16a34a !important;
     padding: 14px 18px;
     border-radius: 10px;
     margin-top: 12px;
-    color: #1e293b;
+    color: #0f172a !important;
 }
 
 .opt-box-true {
-    background-color: #ecfdf5;
-    border: 1.5px solid #10b981;
+    background-color: #ecfdf5 !important;
+    border: 1.5px solid #10b981 !important;
     border-radius: 10px;
     padding: 12px 16px;
     margin-bottom: 8px;
-    color: #065f46;
+    color: #065f46 !important;
     font-weight: 600;
 }
 .opt-box-false {
-    background-color: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background-color: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
     border-radius: 10px;
     padding: 12px 16px;
     margin-bottom: 8px;
-    color: #334155;
+    color: #0f172a !important;
 }
 .opt-box-true p, .opt-box-false p {
     margin: 0 !important;
 }
 
-/* Định dạng 4 ô vuông trả lời ngắn sát nhau chuẩn phiếu thi THPT */
+/* ÉP 4 Ô VUÔNG TRẢ LỜI NGẮN LUÔN NẰM NGANG TRÊN IPHONE & LAPTOP */
+div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+}
+div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) > div[data-testid="stColumn"],
+div[data-testid="stHorizontalBlock"]:has(input[maxlength="1"]) > div[data-testid="column"] {
+    width: 60px !important;
+    min-width: 60px !important;
+    max-width: 60px !important;
+    flex: 0 0 60px !important;
+}
+
 div[data-testid="stTextInput"] input[maxlength="1"] {
     text-align: center !important;
     font-size: 22px !important;
     font-weight: 700 !important;
     color: #1e3a8a !important;
+    -webkit-text-fill-color: #1e3a8a !important;
     background-color: #ffffff !important;
-    border: 2.5px solid #3b82f6 !important;
+    border: 2.5px solid #2563eb !important;
     border-radius: 10px !important;
     width: 58px !important;
     height: 56px !important;
     padding: 2px !important;
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.12) !important;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.14) !important;
 }
 div[data-testid="stTextInput"] input[maxlength="1"]:focus {
     border-color: #d97706 !important;
     background-color: #fffbeb !important;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25) !important;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28) !important;
 }
 
 .essay-notice-box {
-    background: linear-gradient(90deg, #ecfdf5 0%, #d1fae5 100%);
-    border: 1.5px dashed #059669;
-    color: #065f46;
+    background: linear-gradient(90deg, #ecfdf5 0%, #d1fae5 100%) !important;
+    border: 1.5px dashed #059669 !important;
+    color: #065f46 !important;
     padding: 12px 18px;
     border-radius: 10px;
     font-size: 17.5px;
@@ -302,6 +408,10 @@ def get_topic_options_for_grade(grade_str):
     """Trả về danh sách các Chương SGK của khối kết hợp với các mục Ôn thi giữa/cuối kì"""
     chap_dict = KNTT_DATA.get(str(grade_str), {}).get("chapters", {})
     return list(chap_dict.values()) + SPECIAL_EXAM_TOPICS + ["✍️ Tự nhập tên Chuyên đề / Kỳ thi khác..."]
+
+def make_teacher_auth_token():
+    secret_str = st.secrets.get("ADMIN_PASSWORD", "123456") + "_LMC_TEACHER"
+    return hashlib.sha256(secret_str.encode("utf-8")).hexdigest()[:16]
 
 # ================= HÀM XÓA CACHE WIDGET SỬA CÂU HỎI KHI XÓA/CẬP NHẬT =================
 def clear_edit_widget_state(prefixes=("st_tag_", "st_stem_", "st_sa_", "st_sol_", "st_opt_", "st_true_", "st_tf_", "db_tag_", "db_stem_", "db_sa_", "db_sol_", "db_opt_", "db_true_", "db_tf_")):
@@ -596,7 +706,7 @@ def check_question_health(q):
     return " | ".join(issues)
 
 def render_question_card(q, index_label):
-    """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100% ở cả 4 phần"""
+    """Hiển thị đầy đủ 1 câu hỏi (Đề bài cỡ chữ to 20.5px + Phương án 18px + Lời giải)"""
     sanitize_question_obj(q)
     status_str = check_question_health(q)
     st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
@@ -621,7 +731,7 @@ def render_question_card(q, index_label):
     )
 
     stem_disp = clean_leftover_spaces(q.get("stem", ""))
-    st.markdown(stem_disp, unsafe_allow_html=True)
+    st.markdown(f'<div class="q-stem-text">\n\n{stem_disp}\n\n</div>', unsafe_allow_html=True)
 
     if part_num == 1:
         labels = ["A", "B", "C", "D"]
@@ -642,7 +752,6 @@ def render_question_card(q, index_label):
             badge = "🟢 **[Đúng]**" if st_i.get("is_true") else "🔴 **[Sai]**"
             lbl = st_labels[idx] if idx < 4 else f"{idx+1})"
             st_txt = clean_leftover_spaces(st_i.get("text", ""))
-            # Dùng Markdown thuần (không bọc thẻ <div> cùng dòng) để KaTeX/MathJax luôn dịch công thức toán ở ý a) b) c) d)
             st.markdown(f"- **{lbl}** {st_txt} $\\longrightarrow$ {badge}", unsafe_allow_html=True)
     elif part_num == 3:
         st.markdown(f"🔑 **Đáp số trả lời ngắn:** `{q.get('short_ans', '')}`")
@@ -1203,7 +1312,7 @@ def generate_feedback(total, s1, s2, s3, n1, n2, n3, scoring_cfg):
         comments.append("- **Phần III (Trả lời ngắn):** Cần rèn luyện thêm kỹ năng giải toán thực tế và làm tròn số chính xác.")
     return "\n".join(comments)
 
-# ================= COMPONENT GIÁM SÁT & TỰ ĐỘNG NHẢY Ô TRẢ LỜI NGẮN =================
+# ================= COMPONENT GIÁM SÁT & TỰ ĐỘNG NHẢY Ô TRẢ LỜI NGẮN (IPHONE & LAPTOP) =================
 def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_id):
     html_code = f"""
     <div style="display:flex; align-items:center; justify-content:space-between; background:linear-gradient(90deg, #0f172a, #1e293b); color:white; padding:12px 20px; border-radius:12px; font-family:sans-serif; box-shadow:0 4px 12px rgba(0,0,0,0.12);">
@@ -1323,67 +1432,92 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
         }}
     }}
 
-    // Tự động nhảy con trỏ qua ô tiếp theo khi điền đáp số trả lời ngắn (4 ô vuông)
-    function bindShortAnswerAutoAdvance() {{
+    // Tự động nhảy con trỏ NGAY LẬP TỨC (synchronous) qua ô tiếp theo khi điền 1 ký tự (hỗ trợ cả iPhone iOS Safari & Laptop)
+    function setupParentShortAnsListeners() {{
         try {{
             const parentDoc = window.parent.document;
-            const singleInputs = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
-            singleInputs.forEach((inp, idx) => {{
-                if (inp.dataset.autoAdvBound === "1") return;
-                inp.dataset.autoAdvBound = "1";
+            if (!window.parent.__shortAnsDelegated) {{
+                window.parent.__shortAnsDelegated = true;
 
-                inp.addEventListener("input", (e) => {{
+                parentDoc.addEventListener("input", (e) => {{
+                    const t = e.target;
+                    if (!t || t.tagName !== "INPUT" || t.getAttribute("maxlength") !== "1") return;
                     const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
-                    const curIdx = allInps.indexOf(inp);
-                    if (inp.value && inp.value.length >= 1 && (curIdx % 4) < 3) {{
+                    const curIdx = allInps.indexOf(t);
+                    if (curIdx !== -1 && t.value && t.value.length >= 1 && (curIdx % 4) < 3) {{
                         const nextInp = allInps[curIdx + 1];
                         if (nextInp) {{
                             window.parent.__targetShortBoxIdx = curIdx + 1;
                             window.parent.__targetShortBoxTime = Date.now();
-                            setTimeout(() => {{
-                                nextInp.focus();
-                                nextInp.select();
-                            }}, 20);
+                            // Gọi focus() đồng bộ ngay trong sự kiện input để iPhone Safari giữ bàn phím và nhảy con trỏ tức thì
+                            nextInp.focus();
+                            try {{ nextInp.setSelectionRange(0, nextInp.value.length); }} catch (err) {{}}
                         }}
                     }}
-                }});
+                }}, false);
 
-                inp.addEventListener("keydown", (e) => {{
+                parentDoc.addEventListener("keydown", (e) => {{
+                    const t = e.target;
+                    if (!t || t.tagName !== "INPUT" || t.getAttribute("maxlength") !== "1") return;
                     const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
-                    const curIdx = allInps.indexOf(inp);
-                    if (e.key === "Backspace" && (!inp.value || inp.value.length === 0) && (curIdx % 4) > 0) {{
+                    const curIdx = allInps.indexOf(t);
+                    if (curIdx !== -1 && e.key === "Backspace" && (!t.value || t.value.length === 0) && (curIdx % 4) > 0) {{
                         const prevInp = allInps[curIdx - 1];
                         if (prevInp) {{
                             window.parent.__targetShortBoxIdx = curIdx - 1;
                             window.parent.__targetShortBoxTime = Date.now();
-                            setTimeout(() => {{
-                                prevInp.focus();
-                                prevInp.select();
-                            }}, 20);
+                            e.preventDefault();
+                            prevInp.focus();
+                            try {{ prevInp.setSelectionRange(0, prevInp.value.length); }} catch (err) {{}}
                         }}
                     }}
-                }});
+                }}, false);
+            }}
+
+            // Ép hàng chứa 4 ô vuông luôn hiển thị ngang trên iPhone (phòng trường hợp trình duyệt cũ)
+            const allInps = Array.from(parentDoc.querySelectorAll('input[maxlength="1"]'));
+            allInps.forEach(inp => {{
+                const hBlock = inp.closest('[data-testid="stHorizontalBlock"]');
+                if (hBlock) {{
+                    hBlock.style.setProperty("display", "flex", "important");
+                    hBlock.style.setProperty("flex-direction", "row", "important");
+                    hBlock.style.setProperty("flex-wrap", "nowrap", "important");
+                    hBlock.style.setProperty("gap", "8px", "important");
+                    Array.from(hBlock.children).forEach(col => {{
+                        col.style.setProperty("width", "60px", "important");
+                        col.style.setProperty("min-width", "60px", "important");
+                        col.style.setProperty("max-width", "60px", "important");
+                        col.style.setProperty("flex", "0 0 60px", "important");
+                    }});
+                }}
             }});
 
-            // Giữ focus ở ô tiếp theo ngay cả khi Streamlit rerun làm mới DOM
-            if (window.parent.__targetShortBoxIdx !== undefined && (Date.now() - (window.parent.__targetShortBoxTime || 0)) < 1200) {{
-                const targetInp = singleInputs[window.parent.__targetShortBoxIdx];
+            // Khôi phục focus nếu Streamlit rerun làm mới DOM sau khi rời ô trước
+            if (window.parent.__targetShortBoxIdx !== undefined && (Date.now() - (window.parent.__targetShortBoxTime || 0)) < 1500) {{
+                const targetInp = allInps[window.parent.__targetShortBoxIdx];
                 if (targetInp && parentDoc.activeElement !== targetInp) {{
                     targetInp.focus();
                 }}
             }}
         }} catch (err) {{}}
     }}
-    setInterval(bindShortAnswerAutoAdvance, 250);
+    setupParentShortAnsListeners();
+    setInterval(setupParentShortAnsListeners, 200);
     </script>
     """
     components.html(html_code, height=110)
 
-# ================= QUẢN LÝ ĐĂNG NHẬP =================
+# ================= QUẢN LÝ ĐĂNG NHẬP & GIỮ PHIÊN ĐĂNG NHẬP KHI LÀM MỚI TRANG =================
 if "role" not in st.session_state:
     st.session_state.role = None
 if "user" not in st.session_state:
     st.session_state.user = None
+
+# Tự động khôi phục quyền Giáo viên nếu bấm F5 làm mới trình duyệt
+if st.session_state.role is None:
+    qp_auth = st.query_params.get("auth", "")
+    if qp_auth == make_teacher_auth_token():
+        st.session_state.role = "teacher"
 
 if st.session_state.role is None:
     tab_hs, tab_gv = st.tabs(["👨‍🎓 Học sinh", "👨‍🏫 Giáo viên"])
@@ -1410,6 +1544,7 @@ if st.session_state.role is None:
                 expected_pass = st.secrets.get("ADMIN_PASSWORD", "123456")
                 if admin_pass == expected_pass:
                     st.session_state.role = "teacher"
+                    st.query_params["auth"] = make_teacher_auth_token()
                     st.rerun()
                 else:
                     st.error("Sai mật khẩu Giáo viên!")
@@ -1423,15 +1558,26 @@ with st.sidebar:
     else:
         st.write("👨‍🏫 **Chế độ Giáo viên Quản trị**")
         st.caption(f"⚙️ Bộ biên dịch: `{PARSER_VERSION}`")
-    if st.button("🚪 Đăng xuất"):
+        if st.button("🔄 Làm mới dữ liệu", use_container_width=True, type="primary"):
+            st.toast("✅ Đã cập nhật dữ liệu mới nhất từ hệ thống!")
+            st.rerun()
+    if st.button("🚪 Đăng xuất", use_container_width=True):
         st.session_state.role = None
         st.session_state.user = None
+        if "auth" in st.query_params:
+            del st.query_params["auth"]
         st.rerun()
 
 # =====================================================================
-# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (4 TAB RÚT GỌN 2-4 CHỮ)
+# PHÂN HỆ 1: GIAO DIỆN GIÁO VIÊN (4 TAB RÚT GỌN 2-4 CHỮ + NÚT LÀM MỚI NHANH)
 # =====================================================================
 if st.session_state.role == "teacher":
+    top_c1, top_c2 = st.columns([5.2, 1.8])
+    with top_c2:
+        if st.button("🔄 Làm mới kết quả & dữ liệu", key="top_refresh_btn", type="primary", use_container_width=True):
+            st.toast("✅ Đã tải lại kết quả thi và dữ liệu mới nhất!")
+            st.rerun()
+
     t_bank, t_create, t_manage, t_stu = st.tabs([
         "🏦 Ngân hàng đề",
         "🎲 Tạo đề",
@@ -2410,11 +2556,18 @@ if st.session_state.role == "teacher":
             if not exams_list:
                 st.info("Chưa có đề thi nào.")
             else:
-                selected_exam = st.selectbox(
+                sel_c1, sel_c2 = st.columns([4.5, 1.5])
+                selected_exam = sel_c1.selectbox(
                     "📌 Chọn đề thi để xem bảng điểm, thống kê & giám sát:",
                     exams_list,
                     format_func=lambda x: f"[Khối {x.get('grade','12')} - {x.get('chapter','')}] #{x['id']} - {x['title']}"
                 )
+                with sel_c2:
+                    st.markdown("<div style='padding-top:28px;'></div>", unsafe_allow_html=True)
+                    if st.button("🔄 Cập nhật điểm mới nhất", key="refresh_scores_btn", use_container_width=True):
+                        st.toast("✅ Đã làm mới bảng điểm của đề thi!")
+                        st.rerun()
+
                 subs = supabase.table("submissions").select("*, students(full_name, class_name)").eq("exam_id", selected_exam["id"]).execute().data
 
                 if not subs:
@@ -2509,7 +2662,7 @@ if st.session_state.role == "teacher":
                                         st.image(snap["img"], caption=f"Lúc: {snap['time']}")
 
     # -----------------------------------------------------------------
-    # TAB 4: QUẢN LÝ HỌC SINH (THÊM THỦ CÔNG, NHẬP EXCEL, NÚT CHỌN CẢ LỚP & XÓA NHANH)
+    # TAB 4: QUẢN LÝ HỌC SINH (ĐÃ FIX LỖI STREAMLITWIDGETALREADYINSTANTIATEDERROR)
     # -----------------------------------------------------------------
     with t_stu:
         st.subheader("1. Thêm Học sinh vào Lớp")
@@ -2597,9 +2750,14 @@ if st.session_state.role == "teacher":
 
             for cls_name in classes:
                 cls_students = [s for s in all_stu if s["class_name"] == cls_name]
+                cls_ver = st.session_state.get(f"cls_ver_{cls_name}", 0)
+
                 with st.expander(f"🏫 Lớp {cls_name} — Sĩ số: {len(cls_students)} học sinh (Khối {extract_grade_from_class(cls_name)})", expanded=False):
-                    # Nút Chọn cả lớp -> tự động tick hết toàn bộ học sinh trong bảng của lớp đó
-                    tick_all_cls = st.checkbox(f"☑️ Chọn cả lớp {cls_name} (Tích chọn toàn bộ {len(cls_students)} học sinh)", key=f"chk_all_stu_{cls_name}")
+                    # Dùng key có gắn phiên bản _v{cls_ver} để không bao giờ gây lỗi StreamlitWidgetAlreadyInstantiatedError khi reset sau xóa
+                    tick_all_cls = st.checkbox(
+                        f"☑️ Chọn cả lớp {cls_name} (Tích chọn toàn bộ {len(cls_students)} học sinh)",
+                        key=f"chk_all_stu_{cls_name}_v{cls_ver}"
+                    )
 
                     stu_rows = []
                     for idx_s, s_obj in enumerate(cls_students):
@@ -2616,11 +2774,11 @@ if st.session_state.role == "teacher":
                         use_container_width=True,
                         hide_index=True,
                         disabled=["STT", "Tài khoản"],
-                        key=f"stu_editor_{cls_name}_{int(tick_all_cls)}"
+                        key=f"stu_editor_{cls_name}_{int(tick_all_cls)}_v{cls_ver}"
                     )
 
                     act_c1, act_c2 = st.columns([3, 1.5])
-                    if act_c1.button(f"🛠️ Lưu chỉnh sửa & 🗑️ Xóa các học sinh đã tích chọn ({cls_name})", key=f"btn_batch_stu_{cls_name}", type="primary", use_container_width=True):
+                    if act_c1.button(f"🛠️ Lưu chỉnh sửa & 🗑️ Xóa các học sinh đã tích chọn ({cls_name})", key=f"btn_batch_stu_{cls_name}_v{cls_ver}", type="primary", use_container_width=True):
                         to_delete_users = []
                         to_update_records = []
                         for _, r_stu in edited_stu_df.iterrows():
@@ -2637,9 +2795,9 @@ if st.session_state.role == "teacher":
                             supabase.table("students").delete().in_("username", to_delete_users).execute()
                         if to_update_records:
                             supabase.table("students").upsert(to_update_records, on_conflict="username").execute()
-                        if f"chk_all_stu_{cls_name}" in st.session_state:
-                            st.session_state[f"chk_all_stu_{cls_name}"] = False
-                        st.success(f"✅ Đã xóa {len(to_delete_users)} học sinh và cập nhật danh sách lớp {cls_name}!")
+                        # Tăng bộ đếm cls_ver thay vì gán lại key của checkbox đang hiển thị
+                        st.session_state[f"cls_ver_{cls_name}"] = cls_ver + 1
+                        st.toast(f"✅ Đã xóa {len(to_delete_users)} học sinh và cập nhật lớp {cls_name}!")
                         st.rerun()
 
                     cls_excel_buf = io.BytesIO()
@@ -2655,7 +2813,7 @@ if st.session_state.role == "teacher":
                     )
 
 # =====================================================================
-# PHÂN HỆ 2: GIAO DIỆN HỌC SINH LÀM BÀI (HIỆN ĐẠI & TRỰC QUAN)
+# PHÂN HỆ 2: GIAO DIỆN HỌC SINH LÀM BÀI (HIỆN ĐẠI & TƯƠNG THÍCH IPHONE / LAPTOP)
 # =====================================================================
 elif st.session_state.role == "student":
     stu = st.session_state.user
@@ -2744,7 +2902,7 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
 
                     opts = q["shuffled_options"]
                     labels = ["A", "B", "C", "D"]
@@ -2772,14 +2930,13 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
 
                     st_labels = ["a)", "b)", "c)", "d)"]
                     for s_idx, st_item in enumerate(q["statements"]):
                         sid = f"{qid}_s{st_item['id']}"
                         with st.container(border=True):
                             c_text, c_radio = st.columns([4.5, 1.5])
-                            # Dùng Markdown thuần để KaTeX/MathJax luôn dịch công thức toán ở các ý a), b), c), d)
                             c_text.markdown(f"**{st_labels[s_idx]}** {st_item['text']}", unsafe_allow_html=True)
                             prev_val = current_answers.get(sid)
                             r_idx = ["Đúng", "Sai"].index(prev_val) if prev_val in ["Đúng", "Sai"] else None
@@ -2808,7 +2965,7 @@ elif st.session_state.role == "student":
                 qid = q["id"]
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#d97706,#b45309);">Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
 
                     prev_short = str(current_answers.get(qid, ""))
                     d1 = prev_short[0] if len(prev_short) >= 1 else ""
@@ -2816,8 +2973,8 @@ elif st.session_state.role == "student":
                     d3 = prev_short[2] if len(prev_short) >= 3 else ""
                     d4 = prev_short[3] if len(prev_short) >= 4 else ""
 
-                    # 4 ô vuông sát nhau, ẩn toàn bộ chữ Ô 1, Ô 2, Ô 3, Ô 4
-                    bc1, bc2, bc3, bc4, bc_info = st.columns([0.52, 0.52, 0.52, 0.52, 5.92], gap="small")
+                    # 4 ô vuông trong 1 hàng ngang 4 cột độc lập để luôn nằm ngang trên iPhone & Laptop
+                    bc1, bc2, bc3, bc4 = st.columns(4, gap="small")
                     b1 = bc1.text_input("b1", value=d1, max_chars=1, key=f"sa_b1_{qid}", placeholder="", label_visibility="collapsed")
                     b2 = bc2.text_input("b2", value=d2, max_chars=1, key=f"sa_b2_{qid}", placeholder="", label_visibility="collapsed")
                     b3 = bc3.text_input("b3", value=d3, max_chars=1, key=f"sa_b3_{qid}", placeholder="", label_visibility="collapsed")
@@ -2830,25 +2987,24 @@ elif st.session_state.role == "student":
                         box_errors.append("⚠️ Vui lòng điền lần lượt từ trái sang phải (không bỏ trống ô phía trước)!")
 
                     if b1 != "" and b1 not in allowed_box1:
-                        box_errors.append(f"⚠️ Ô thứ 1 chỉ được điền dấu '-' hoặc chữ số (0-9).")
+                        box_errors.append("⚠️ Ô thứ 1 chỉ được điền dấu '-' hoặc chữ số (0-9).")
                     if b2 != "" and b2 not in allowed_box23:
-                        box_errors.append(f"⚠️ Ô thứ 2 chỉ được điền dấu ',' hoặc chữ số (0-9).")
+                        box_errors.append("⚠️ Ô thứ 2 chỉ được điền dấu ',' hoặc chữ số (0-9).")
                     if b3 != "" and b3 not in allowed_box23:
-                        box_errors.append(f"⚠️ Ô thứ 3 chỉ được điền dấu ',' hoặc chữ số (0-9).")
+                        box_errors.append("⚠️ Ô thứ 3 chỉ được điền dấu ',' hoặc chữ số (0-9).")
                     if b4 != "" and b4 not in allowed_box4:
-                        box_errors.append(f"⚠️ Ô thứ 4 chỉ được điền chữ số (0-9).")
+                        box_errors.append("⚠️ Ô thứ 4 chỉ được điền chữ số (0-9).")
                     if b2 == "," and b3 == ",":
                         box_errors.append("⚠️ Không được điền 2 dấu phẩy (,) trong cùng một đáp số!")
 
-                    with bc_info:
-                        if box_errors:
-                            for err_m in box_errors:
-                                st.error(err_m)
-                        else:
-                            combined_ans = b1 + b2 + b3 + b4
-                            current_answers[qid] = combined_ans
-                            if combined_ans:
-                                st.markdown(f"<div style='padding-top:12px;color:#065f46;font-weight:700;font-size:18px;'>✅ Đáp số: <code style='font-size:20px;'>{combined_ans}</code></div>", unsafe_allow_html=True)
+                    if box_errors:
+                        for err_m in box_errors:
+                            st.error(err_m)
+                    else:
+                        combined_ans = b1 + b2 + b3 + b4
+                        current_answers[qid] = combined_ans
+                        if combined_ans:
+                            st.markdown(f"<div style='padding-top:4px;color:#065f46;font-weight:700;font-size:18px;'>✅ Đáp số: <code style='font-size:20px;'>{combined_ans}</code></div>", unsafe_allow_html=True)
 
         if p4:
             st.markdown(
@@ -2858,7 +3014,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p4):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:linear-gradient(135deg,#059669,#047857);">Bài {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
                     st.markdown(
                         '<div class="essay-notice-box">✍️ Làm vào tập hoặc giấy đôi theo lời dặn từ giáo viên trên lớp</div>',
                         unsafe_allow_html=True
@@ -2914,7 +3070,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p1):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge">Phần I - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
                     user_c = str(saved_answers.get(q["id"]))
                     for opt in q["shuffled_options"]:
                         is_u = (str(opt["id"]) == user_c)
@@ -2927,7 +3083,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p2):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#6d28d9;">Phần II - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
                     st_labels = ["a)", "b)", "c)", "d)"]
                     for s_idx, st_i in enumerate(q["statements"]):
                         sid = f"{q['id']}_s{st_i['id']}"
@@ -2941,7 +3097,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p3):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#d97706;">Phần III - Câu {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
                     u_sa = saved_answers.get(q["id"], "Chưa điền")
                     st.write(f"🔑 **Đáp số đúng:** `{q['short_ans']}` | **Bạn điền:** `{u_sa}`")
                     if q.get("solution"):
@@ -2950,7 +3106,7 @@ elif st.session_state.role == "student":
             for idx, q in enumerate(p4):
                 with st.container(border=True):
                     st.markdown(f'<span class="q-badge" style="background:#047857;">Phần IV (Tự luận) - Bài {idx+1}</span>', unsafe_allow_html=True)
-                    st.markdown(q["stem"], unsafe_allow_html=True)
+                    st.markdown(f'<div class="q-stem-text">\n\n{q["stem"]}\n\n</div>', unsafe_allow_html=True)
                     st.markdown('<div class="essay-notice-box">✍️ Làm vào tập hoặc giấy đôi theo lời dặn từ giáo viên trên lớp</div>', unsafe_allow_html=True)
                     if q.get("solution"):
                         st.markdown(f'<div class="solution-box">\n\n📖 **Lời giải chuẩn:**\n\n{q["solution"]}\n\n</div>', unsafe_allow_html=True)
