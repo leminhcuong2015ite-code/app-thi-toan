@@ -7,6 +7,7 @@ import datetime
 import re
 import hashlib
 import io
+import uuid
 import importlib
 import kntt_mapping
 import latex_parser
@@ -187,6 +188,36 @@ LEVEL_COLORS = {
     "C": ("#fce7f3", "#9d174d")
 }
 
+# ================= HÀM XÓA CACHE WIDGET SỬA CÂU HỎI KHI XÓA/CẬP NHẬT =================
+def clear_edit_widget_state(prefixes=("st_tag_", "st_stem_", "st_sa_", "st_sol_", "db_tag_", "db_stem_", "db_sa_", "db_sol_")):
+    """Xóa triệt để state của các ô nhập liệu trong st.session_state để khi xóa câu không bị lưu nhầm sang câu kế tiếp"""
+    keys_to_remove = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in prefixes)]
+    for k in keys_to_remove:
+        del st.session_state[k]
+
+# ================= HÀM TẢI TOÀN BỘ METADATA NGÂN HÀNG ĐỂ THỐNG KÊ =================
+def fetch_all_bank_metadata():
+    """Tải danh sách siêu dữ liệu (không kèm ảnh SVG nặng) của toàn bộ câu hỏi trong Ngân hàng để thống kê tức thì"""
+    all_rows = []
+    batch_size = 1000
+    offset = 0
+    while True:
+        res = (
+            supabase.table("question_bank")
+            .select("id, tag_id, grade, chapter_code, chapter_name, lesson_code, lesson_name, level_code, level_name, part")
+            .order("id")
+            .range(offset, offset + batch_size - 1)
+            .execute()
+            .data
+        )
+        if not res:
+            break
+        all_rows.extend(res)
+        if len(res) < batch_size:
+            break
+        offset += batch_size
+    return all_rows
+
 # ================= HÀM ĐỌC FILE CSV / EXCEL AN TOÀN (CHỐNG LỖI UNICODEDECODEERROR) =================
 def read_student_file_safe(uploaded_file):
     """Đọc file danh sách học sinh (.csv hoặc .xlsx) tự động nhận diện bảng mã tiếng Việt và dấu phân cách"""
@@ -214,9 +245,12 @@ def read_student_file_safe(uploaded_file):
 
 # ================= HÀM LÀM SẠCH LỆNH KHOẢNG TRẮNG & KIỂM TRA TRẠNG THÁI HIỂN THỊ =================
 def clean_leftover_spaces(txt):
-    """Làm sạch các lệnh ngoặc kép (\lq\lq, \rq\rq) và khoảng trắng LaTeX (\ , \, , \quad) bị sót"""
+    """Làm sạch các lệnh \allowdisplaybreaks, ngoặc kép (\lq\lq, \rq\rq) và khoảng trắng LaTeX (\ , \, , \quad) bị sót"""
     if not txt:
         return ""
+    txt = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', txt)
+    txt = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', txt)
+    txt = re.sub(r'(?<!\$)\\(displaystyle|boldmath|unboldmath|noindent|indent|par|centering|leavevmode|vfill|hfill|smallskip|medskip|bigskip)\b', '', txt)
     txt = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', txt)
     txt = re.sub(r'\s*\\rq\s*\\rq\\\s+', '" ', txt)
     txt = re.sub(r'\s*\\rq\s*\\rq', '"', txt)
@@ -224,12 +258,14 @@ def clean_leftover_spaces(txt):
     txt = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", txt)
     txt = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", txt)
     txt = re.sub(r'\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', txt)
-    return txt
+    return txt.strip()
 
 def sanitize_question_obj(q):
     """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (cả câu mới nạp và câu cũ trong kho)"""
     if not q:
         return q
+    if "_uid" not in q:
+        q["_uid"] = str(uuid.uuid4())[:8]
     q["stem"] = clean_leftover_spaces(q.get("stem", ""))
     q["solution"] = clean_leftover_spaces(q.get("solution", ""))
     if q.get("part") == 1:
@@ -254,7 +290,7 @@ def check_question_health(q):
         issues.append("❌ Lỗi hình TikZ")
     if not q.get("solution", "").strip():
         issues.append("⚠️ Trống lời giải")
-    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini|lq|rq)\b', full_rendered):
+    if re.search(r'\\(choice|choiceTF|shortans|loigiai|logiai|itemch|immini|lq|rq|allowdisplaybreaks)\b', full_rendered):
         issues.append("⚠️ Sót lệnh LaTeX")
     elif re.search(r'\\(begin|end)\{(?!(aligned|array|cases|matrix|pmatrix|bmatrix|vmatrix)\b)', full_rendered):
         issues.append("⚠️ Sót môi trường LaTeX")
@@ -811,9 +847,135 @@ if st.session_state.role == "teacher":
     ])
 
     # -----------------------------------------------------------------
-    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
+    # TAB 1: QUẢN LÝ NGÂN HÀNG CÂU HỎI (THỐNG KÊ TOÀN KHO, NẠP, DUYỆT, SỬA/XÓA & DỌN SẠCH KHO)
     # -----------------------------------------------------------------
     with t_bank:
+        # -------------------------------------------------------------
+        # MỤC 0: THỐNG KÊ TOÀN BỘ NGÂN HÀNG CÂU HỎI HIỆN TẠI
+        # -------------------------------------------------------------
+        with st.expander("📊 0. Xem Thống kê Toàn bộ Ngân hàng Câu hỏi hiện tại (Theo Khối, Chương, Bài, Phần & Mức độ)", expanded=True):
+            all_meta = fetch_all_bank_metadata()
+            if not all_meta:
+                st.info("📭 Ngân hàng câu hỏi hiện đang trống. Hãy nạp câu hỏi ở mục 1 bên dưới nhé!")
+            else:
+                total_q_all = len(all_meta)
+                cnt_p1 = sum(1 for r in all_meta if r.get("part") == 1)
+                cnt_p2 = sum(1 for r in all_meta if r.get("part") == 2)
+                cnt_p3 = sum(1 for r in all_meta if r.get("part") == 3)
+                cnt_p4 = sum(1 for r in all_meta if r.get("part") == 4)
+
+                cnt_n = sum(1 for r in all_meta if r.get("level_code") == "N")
+                cnt_h = sum(1 for r in all_meta if r.get("level_code") == "H")
+                cnt_v = sum(1 for r in all_meta if r.get("level_code") == "V")
+                cnt_c = sum(1 for r in all_meta if r.get("level_code") == "C")
+
+                grades_present = sorted(list({str(r.get("grade", "12")) for r in all_meta}), key=lambda x: int(x) if x.isdigit() else 99, reverse=True)
+                lessons_present = len({(str(r.get("grade")), r.get("lesson_code")) for r in all_meta})
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("🏦 Tổng câu toàn Ngân hàng", f"{total_q_all} câu", f"{len(grades_present)} khối lớp | {lessons_present} bài học")
+                m2.metric("📌 Phần I (ABCD) & Phần II (Đ/S)", f"P.I: {cnt_p1} | P.II: {cnt_p2}", "Trắc nghiệm khách quan")
+                m3.metric("🎯 Phần III (TLN) & Phần IV (TL)", f"P.III: {cnt_p3} | P.IV: {cnt_p4}", "Trả lời ngắn & Tự luận")
+                m4.metric("🧠 Phân bố Mức độ (N-H-V-C)", f"N:{cnt_n} | H:{cnt_h}", f"V: {cnt_v} | C: {cnt_c}")
+
+                # Bảng 1: Tổng hợp theo từng Khối lớp
+                grade_summary_rows = []
+                for g_val in ["12", "11", "10", "9", "8", "7", "6"]:
+                    g_rows = [r for r in all_meta if str(r.get("grade")) == g_val]
+                    if not g_rows:
+                        continue
+                    g_chaps = len({r.get("chapter_code") for r in g_rows})
+                    g_lessons = len({r.get("lesson_code") for r in g_rows})
+                    grade_summary_rows.append({
+                        "Khối lớp": f"Khối {g_val}",
+                        "Tổng số câu": len(g_rows),
+                        "Số Chương có câu hỏi": g_chaps,
+                        "Số Bài có câu hỏi": g_lessons,
+                        "Phần I (ABCD)": sum(1 for r in g_rows if r.get("part") == 1),
+                        "Phần II (Đ/S)": sum(1 for r in g_rows if r.get("part") == 2),
+                        "Phần III (TLN)": sum(1 for r in g_rows if r.get("part") == 3),
+                        "Phần IV (Tự luận)": sum(1 for r in g_rows if r.get("part") == 4),
+                        "Nhận biết (N)": sum(1 for r in g_rows if r.get("level_code") == "N"),
+                        "Thông hiểu (H)": sum(1 for r in g_rows if r.get("level_code") == "H"),
+                        "Vận dụng (V)": sum(1 for r in g_rows if r.get("level_code") == "V"),
+                        "Vận dụng cao (C)": sum(1 for r in g_rows if r.get("level_code") == "C")
+                    })
+
+                st.markdown("##### 📋 1. Bảng tổng hợp số lượng câu hỏi theo từng Khối lớp:")
+                df_grade_sum = pd.DataFrame(grade_summary_rows)
+                st.dataframe(df_grade_sum, use_container_width=True, hide_index=True)
+
+                # Bảng 2: Chi tiết theo từng Chương & Bài học
+                st.markdown("##### 📚 2. Thống kê chi tiết theo từng Chương & Bài học trong Ngân hàng:")
+                stat_grade_filter = st.selectbox(
+                    "Chọn Khối lớp muốn xem chi tiết từng Bài học:",
+                    ["Tất cả các Khối"] + [f"Khối {g}" for g in grades_present],
+                    key="stat_bank_grade_flt"
+                )
+
+                lesson_stat_rows = []
+                target_grades = grades_present if stat_grade_filter == "Tất cả các Khối" else [stat_grade_filter.replace("Khối ", "").strip()]
+
+                for g_val in target_grades:
+                    g_rows = [r for r in all_meta if str(r.get("grade")) == g_val]
+                    if not g_rows:
+                        continue
+                    known_lessons = KNTT_DATA.get(g_val, {}).get("lessons", {})
+                    lesson_codes_in_g = sorted(
+                        list({r.get("lesson_code", "B1") for r in g_rows}),
+                        key=lambda b: int(re.sub(r'\D', '', b) or 0)
+                    )
+                    for b_code in lesson_codes_in_g:
+                        b_rows = [r for r in g_rows if r.get("lesson_code") == b_code]
+                        c_code = b_rows[0].get("chapter_code", "C1")
+                        b_name = known_lessons.get(b_code, (c_code, b_rows[0].get("lesson_name", b_code)))[1]
+                        p1_r = [r for r in b_rows if r.get("part") == 1]
+                        p2_r = [r for r in b_rows if r.get("part") == 2]
+                        p3_r = [r for r in b_rows if r.get("part") == 3]
+                        p4_r = [r for r in b_rows if r.get("part") == 4]
+
+                        def _fmt_lvl(rows_sub):
+                            if not rows_sub:
+                                return "0"
+                            n_c = sum(1 for x in rows_sub if x.get("level_code") == "N")
+                            h_c = sum(1 for x in rows_sub if x.get("level_code") == "H")
+                            v_c = sum(1 for x in rows_sub if x.get("level_code") == "V")
+                            c_c = sum(1 for x in rows_sub if x.get("level_code") == "C")
+                            return f"{len(rows_sub)} (N:{n_c}|H:{h_c}|V:{v_c}|C:{c_c})"
+
+                        lesson_stat_rows.append({
+                            "Khối": f"Khối {g_val}",
+                            "Chương": c_code,
+                            "Mã Bài": b_code,
+                            "Tên Bài học": b_name,
+                            "Tổng số câu": len(b_rows),
+                            "Phần I (ABCD)": _fmt_lvl(p1_r),
+                            "Phần II (Đ/S)": _fmt_lvl(p2_r),
+                            "Phần III (TLN)": _fmt_lvl(p3_r),
+                            "Phần IV (Tự luận)": _fmt_lvl(p4_r),
+                            "Tổng N / H / V / C": (
+                                f"N:{sum(1 for x in b_rows if x.get('level_code')=='N')} | "
+                                f"H:{sum(1 for x in b_rows if x.get('level_code')=='H')} | "
+                                f"V:{sum(1 for x in b_rows if x.get('level_code')=='V')} | "
+                                f"C:{sum(1 for x in b_rows if x.get('level_code')=='C')}"
+                            )
+                        })
+
+                df_lesson_stat = pd.DataFrame(lesson_stat_rows)
+                st.dataframe(df_lesson_stat, use_container_width=True, hide_index=True)
+
+                stat_excel_buf = io.BytesIO()
+                with pd.ExcelWriter(stat_excel_buf, engine="openpyxl") as writer:
+                    df_grade_sum.to_excel(writer, sheet_name="Tong_hop_theo_Khoi", index=False)
+                    df_lesson_stat.to_excel(writer, sheet_name="Chi_tiet_theo_Bai", index=False)
+                st.download_button(
+                    "📥 Xuất báo cáo thống kê toàn bộ Ngân hàng ra Excel (.xlsx)",
+                    stat_excel_buf.getvalue(),
+                    "thong_ke_ngan_hang_cau_hoi.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        st.divider()
         st.subheader("📥 1. Nạp câu hỏi từ file (.tex hoặc .txt) vào Ngân hàng")
         st.info("💡 Hỗ trợ nhận diện cả câu trắc nghiệm (`\\begin{ex}`) và bài tập Tự luận (`\\begin{bt}`). Bạn có thể chọn tự động loại bỏ câu thiếu mã ID, tự gán thủ công hoặc gán theo mặc định.")
 
@@ -849,6 +1011,7 @@ if st.session_state.role == "teacher":
                     dropped_no_id = 0
 
                     for q in parsed_qs:
+                        q["_uid"] = str(uuid.uuid4())[:8]
                         sanitize_question_obj(q)
                         if q.get("tag_id") == "Chưa gắn mã":
                             if missing_id_mode.startswith("🗑️"):
@@ -861,12 +1024,15 @@ if st.session_state.role == "teacher":
                                     q.update(meta)
                         processed_qs.append(q)
 
+                    clear_edit_widget_state()
                     st.session_state["staged_bank_qs"] = processed_qs
                     st.session_state["dropped_no_id_count"] = dropped_no_id
                     st.session_state["staged_file_sig"] = file_sig
+                    st.session_state["staged_ver"] = st.session_state.get("staged_ver", 0) + 1
 
             staged_qs = st.session_state.get("staged_bank_qs", [])
             dropped_cnt = st.session_state.get("dropped_no_id_count", 0)
+            staged_ver = st.session_state.get("staged_ver", 0)
 
             if dropped_cnt > 0:
                 st.warning(f"🗑️ Đã tự động loại bỏ **{dropped_cnt} câu hỏi** không có mã ID theo tùy chọn của bạn.")
@@ -890,6 +1056,7 @@ if st.session_state.role == "teacher":
                     edit_rows.append({
                         "Xóa": False,
                         "STT": idx + 1,
+                        "Mã gốc": q.get("id", f"q_{idx+1}"),
                         "Mã ID (Gõ để tự gán/sửa)": q.get("tag_id", ""),
                         "Trạng thái": check_question_health(q),
                         "Dạng thức": PART_LABELS.get(q.get("part", 1), ""),
@@ -901,8 +1068,8 @@ if st.session_state.role == "teacher":
                     pd.DataFrame(edit_rows),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["STT", "Trạng thái", "Dạng thức", "Khối", "Bài học", "Mức độ"],
-                    key="staged_table_editor"
+                    disabled=["STT", "Mã gốc", "Trạng thái", "Dạng thức", "Khối", "Bài học", "Mức độ"],
+                    key=f"staged_table_editor_{staged_ver}"
                 )
 
                 btn_col1, btn_col2 = st.columns(2)
@@ -919,13 +1086,17 @@ if st.session_state.role == "teacher":
                                 else:
                                     q_obj["tag_id"] = new_id_str
                             new_staged.append(q_obj)
+                    clear_edit_widget_state()
                     st.session_state["staged_bank_qs"] = new_staged
+                    st.session_state["staged_ver"] = staged_ver + 1
                     st.toast("✅ Đã cập nhật danh sách câu hỏi tạm!")
                     st.rerun()
 
                 if untagged_count > 0:
                     if btn_col2.button(f"🗑️ Xóa nhanh toàn bộ {untagged_count} câu chưa có mã ID", use_container_width=True):
+                        clear_edit_widget_state()
                         st.session_state["staged_bank_qs"] = [q for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
+                        st.session_state["staged_ver"] = staged_ver + 1
                         st.toast(f"Đã loại bỏ {untagged_count} câu thiếu mã ID!")
                         st.rerun()
 
@@ -966,24 +1137,31 @@ if st.session_state.role == "teacher":
                         )
                         start_i = (cur_page - 1) * page_size
                         for orig_idx, q_item in filtered_pre_qs[start_i:start_i + page_size]:
+                            # Dùng khóa định danh duy nhất kết hợp _uid, hash và staged_ver để ép làm mới hoàn toàn sau mỗi lần xóa/sửa
+                            q_uid = f"{q_item.get('_uid', q_item.get('id', orig_idx))}_{q_item.get('question_hash', '')[:8]}_v{staged_ver}"
+                            orig_q_code = q_item.get("id", f"q_{orig_idx + 1}")
                             col_q, col_btn = st.columns([6, 1])
                             with col_q:
-                                render_question_card(q_item, f"Câu {orig_idx + 1}")
+                                render_question_card(q_item, f"Câu {orig_idx + 1} ({orig_q_code})")
                             with col_btn:
-                                if st.button("🗑️ Xóa ngay", key=f"del_stage_{orig_idx}"):
+                                if st.button("🗑️ Xóa ngay", key=f"del_stage_{q_uid}"):
                                     staged_qs.pop(orig_idx)
+                                    clear_edit_widget_state()
                                     st.session_state["staged_bank_qs"] = staged_qs
+                                    st.session_state["staged_ver"] = staged_ver + 1
                                     st.rerun()
-                            with st.expander(f"✏️ Tự gán Mã ID / Sửa nội dung Câu {orig_idx + 1}"):
-                                u_tag = st.text_input("Nhập Mã ID chuẩn (VD: 10-C1-B1-N)", value=q_item.get("tag_id", ""), key=f"st_tag_{orig_idx}")
-                                u_stem = st.text_area("Nội dung đề bài (Markdown / LaTeX)", value=q_item.get("stem", ""), height=100, key=f"st_stem_{orig_idx}")
+                            with st.expander(f"✏️ Tự gán Mã ID / Sửa nội dung Câu {orig_idx + 1} [{orig_q_code} — {q_item.get('tag_id', 'Chưa gắn mã')}]"):
+                                u_tag = st.text_input("Nhập Mã ID chuẩn (VD: 10-C1-B1-N)", value=q_item.get("tag_id", ""), key=f"st_tag_{q_uid}")
+                                u_stem = st.text_area("Nội dung đề bài (Markdown / LaTeX)", value=q_item.get("stem", ""), height=100, key=f"st_stem_{q_uid}")
                                 u_sa = None
                                 if q_item.get("part") == 3:
-                                    u_sa = st.text_input("Đáp số trả lời ngắn", value=str(q_item.get("short_ans", "")), key=f"st_sa_{orig_idx}")
-                                u_sol = st.text_area("Lời giải chi tiết", value=q_item.get("solution", ""), height=100, key=f"st_sol_{orig_idx}")
-                                if st.button("💾 Lưu chỉnh sửa câu này", key=f"btn_save_st_{orig_idx}"):
+                                    u_sa = st.text_input("Đáp số trả lời ngắn", value=str(q_item.get("short_ans", "")), key=f"st_sa_{q_uid}")
+                                u_sol = st.text_area("Lời giải chi tiết", value=q_item.get("solution", ""), height=100, key=f"st_sol_{q_uid}")
+                                if st.button("💾 Lưu chỉnh sửa câu này", key=f"btn_save_st_{q_uid}"):
                                     staged_qs[orig_idx] = apply_quick_edit_to_question(q_item, u_tag, u_stem, u_sol, u_sa)
+                                    clear_edit_widget_state()
                                     st.session_state["staged_bank_qs"] = staged_qs
+                                    st.session_state["staged_ver"] = staged_ver + 1
                                     st.success("Đã cập nhật câu hỏi!")
                                     st.rerun()
                             st.divider()
@@ -1099,6 +1277,7 @@ if st.session_state.role == "teacher":
             if not inspect_list:
                 st.info("Không có câu hỏi nào khớp với bộ lọc.")
             else:
+                db_ver = st.session_state.get("db_ver", 0)
                 b_page_size = len(inspect_list) if b_page_opt == "Tất cả" else int(b_page_opt)
                 b_total_pages = max(1, (len(inspect_list) + b_page_size - 1) // b_page_size)
                 b_cur_page = st.number_input(
@@ -1108,27 +1287,30 @@ if st.session_state.role == "teacher":
                 b_start = (b_cur_page - 1) * b_page_size
                 for item in inspect_list[b_start:b_start + b_page_size]:
                     qd = item["question_data"]
+                    db_uid = f"{item['id']}_{item.get('question_hash', '')[:8]}_v{db_ver}"
                     c_card, c_act = st.columns([6.2, 1])
                     with c_card:
                         render_question_card(qd, f"ID Kho #{item['id']}")
                     with c_act:
-                        if st.button("🗑️ Xóa", key=f"del_qb_{item['id']}"):
+                        if st.button("🗑️ Xóa", key=f"del_qb_{db_uid}"):
                             supabase.table("question_bank").delete().eq("id", item["id"]).execute()
                             try:
                                 supabase.rpc("sync_question_bank_seq").execute()
                             except Exception:
                                 pass
+                            clear_edit_widget_state()
+                            st.session_state["db_ver"] = db_ver + 1
                             st.toast(f"Đã xóa câu #{item['id']} khỏi Ngân hàng!")
                             st.rerun()
 
-                    with st.expander(f"✏️ Sửa Mã ID / Nội dung câu #{item['id']}"):
-                        db_tag = st.text_input("Mã ID (VD: 10-C1-B1-N)", value=item.get("tag_id", ""), key=f"db_tag_{item['id']}")
-                        db_stem = st.text_area("Nội dung đề bài", value=qd.get("stem", ""), height=100, key=f"db_stem_{item['id']}")
+                    with st.expander(f"✏️ Sửa Mã ID / Nội dung câu #{item['id']} [{item.get('tag_id', '')}]"):
+                        db_tag = st.text_input("Mã ID (VD: 10-C1-B1-N)", value=item.get("tag_id", ""), key=f"db_tag_{db_uid}")
+                        db_stem = st.text_area("Nội dung đề bài", value=qd.get("stem", ""), height=100, key=f"db_stem_{db_uid}")
                         db_sa = None
                         if item["part"] == 3:
-                            db_sa = st.text_input("Đáp số trả lời ngắn", value=str(qd.get("short_ans", "")), key=f"db_sa_{item['id']}")
-                        db_sol = st.text_area("Lời giải chi tiết", value=qd.get("solution", ""), height=100, key=f"db_sol_{item['id']}")
-                        if st.button("💾 Cập nhật vào Ngân hàng", key=f"btn_upd_qb_{item['id']}", type="primary"):
+                            db_sa = st.text_input("Đáp số trả lời ngắn", value=str(qd.get("short_ans", "")), key=f"db_sa_{db_uid}")
+                        db_sol = st.text_area("Lời giải chi tiết", value=qd.get("solution", ""), height=100, key=f"db_sol_{db_uid}")
+                        if st.button("💾 Cập nhật vào Ngân hàng", key=f"btn_upd_qb_{db_uid}", type="primary"):
                             updated_q = apply_quick_edit_to_question(qd, db_tag, db_stem, db_sol, db_sa)
                             supabase.table("question_bank").update({
                                 "tag_id": updated_q["tag_id"],
@@ -1142,6 +1324,8 @@ if st.session_state.role == "teacher":
                                 "question_data": updated_q,
                                 "question_hash": updated_q["question_hash"]
                             }).eq("id", item["id"]).execute()
+                            clear_edit_widget_state()
+                            st.session_state["db_ver"] = db_ver + 1
                             st.success(f"Đã cập nhật câu #{item['id']} thành công!")
                             st.rerun()
                     st.divider()
