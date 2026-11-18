@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.3 - Fix LaTeX Quotes, Backslash Spaces & Auto-Reload"
+PARSER_VERSION = "V5.4 - Clean allowdisplaybreaks, Quotes, Spaces & Full Bank Stats"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -181,6 +181,24 @@ def unwrap_immini(text):
     return text
 
 
+def unwrap_textcolor(text):
+    r"""Tách \textcolor{màu}{nội dung} thành nội dung"""
+    pattern = re.compile(r'\\textcolor(?![a-zA-Z])')
+    search_pos = 0
+    while True:
+        m = pattern.search(text, search_pos)
+        if not m:
+            break
+        args, end_pos = extract_braced_args(text, m.end(), 2)
+        if len(args) < 2:
+            search_pos = m.end()
+            continue
+        replacement = args[1]
+        text = text[:m.start()] + replacement + text[end_pos:]
+        search_pos = m.start() + len(replacement)
+    return text
+
+
 def replace_macro_one_arg(text, macro_name, prefix, suffix):
     r"""Thay thế các macro có 1 đối số"""
     pattern = re.compile(r'\\' + macro_name + r'(?![a-zA-Z])')
@@ -205,7 +223,8 @@ def replace_macro_one_arg(text, macro_name, prefix, suffix):
 
 def normalize_math_internals(math_str):
     r"""Chuẩn hóa mọi ký hiệu toán bên trong $...$ hoặc $$...$$ sang chuẩn MathJax"""
-    math_str = re.sub(r'\\(allowdisplaybreaks|displaystyle|limits|nolimits|boldmath)\b', '', math_str)
+    math_str = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', math_str)
+    math_str = re.sub(r'\\(displaystyle|limits|nolimits|boldmath|unboldmath)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
     math_str = math_str.replace('~', r'\,')
@@ -245,6 +264,11 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
+    # Loại bỏ ngay \allowdisplaybreaks (kể cả có tham số [1]..[4]) và các lệnh cấu hình hiển thị đặt ngoài công thức toán
+    text = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', text)
+    text = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', text)
+    text = re.sub(r'\\(displaystyle|boldmath|unboldmath)\b', '', text)
+
     # Xử lý các dấu ngoặc kép \lq\lq và \rq\rq kèm lệnh cách "\ " ngay sau nó
     text = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', text)
     text = re.sub(r'\s*\\rq\s*\\rq\\\s+', '" ', text)
@@ -254,6 +278,8 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", text)
 
     text = unwrap_immini(text)
+    text = unwrap_textcolor(text)
+    text = re.sub(r'\\color\s*\{[^}]*\}', '', text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
     visual_pattern = re.compile(
@@ -271,7 +297,11 @@ def clean_latex_to_markdown(text):
     text = visual_pattern.sub(_visual_repl, text)
 
     text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
-    text = re.sub(r'\\(noindent|par|centering|leavevmode|vfill|hfill|newpage|clearpage|smallskip|medskip|bigskip)\b', '', text)
+    text = re.sub(
+        r'\\(noindent|indent|par|centering|raggedright|raggedleft|leavevmode|vfill|hfill|dotfill|hrulefill|newpage|clearpage|pagebreak|nopagebreak|linebreak|nolinebreak|smallskip|medskip|bigskip|tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|bfseries|itshape|upshape|normalfont|selectfont)\b',
+        '',
+        text
+    )
     text = re.sub(r'\\(vspace|hspace)\*?\{.*?\}', ' ', text)
 
     text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
@@ -308,6 +338,7 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'innghieng', '*', '*')
         text = replace_macro_one_arg(text, 'emph', '*', '*')
         text = replace_macro_one_arg(text, 'underline', '<u>', '</u>')
+        text = replace_macro_one_arg(text, 'uline', '<u>', '</u>')
         text = replace_macro_one_arg(text, 'fbox', '`', '`')
 
     math_blocks = {}
@@ -334,6 +365,7 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
     text = text.replace('{,}', ',').replace('~', ' ')
+    text = re.sub(r'\\(dots|ldots|cdots)\b', '...', text)
     # Chuyển "\ ", "\,", "\;", "\!", "\:", "\quad", "\qquad", "\enspace", "\thinspace" ngoài môi trường toán thành khoảng trắng thường
     text = re.sub(r'\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', text)
     text = text.replace('``', '"').replace("''", '"')
