@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.4 - Clean allowdisplaybreaks, Quotes, Spaces & Full Bank Stats"
+PARSER_VERSION = "V5.5 - Fix immini Wrapping choice/choiceTF/shortans & allowdisplaybreaks"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -164,8 +164,9 @@ def compile_latex_snippet_to_svg(latex_snippet):
 
 
 def unwrap_immini(text):
-    r"""Tách cấu trúc \immini và \immini[thm] của gói ex_test"""
+    r"""Tách cấu trúc \immini và \immini[thm] của gói ex_test (kể cả khi \choice nằm bên trong \immini)"""
     pattern = re.compile(r'\\immini(thm)?(?![a-zA-Z])')
+    choice_Split_pat = re.compile(r'\\(choiceTF(?:t|n)?|choice|motcot|haicot|boncot|shortans)(?![a-zA-Z])')
     search_pos = 0
     while True:
         m = pattern.search(text, search_pos)
@@ -175,9 +176,15 @@ def unwrap_immini(text):
         if len(args) < 2:
             search_pos = m.end()
             continue
-        combined = args[0] + "\n\n" + args[1]
+        arg0, arg1 = args[0], args[1]
+        # Nếu bên trong arg0 có chứa \choice / \choiceTF / \shortans thì chèn hình vẽ (arg1) vào ngay trước \choice
+        cm = choice_Split_pat.search(arg0)
+        if cm:
+            combined = arg0[:cm.start()].strip() + "\n\n" + arg1.strip() + "\n\n" + arg0[cm.start():].strip()
+        else:
+            combined = arg0 + "\n\n" + arg1
         text = text[:m.start()] + combined + text[end_pos:]
-        search_pos = m.start() + len(combined)
+        search_pos = m.start()
     return text
 
 
@@ -402,6 +409,10 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
+    # QUAN TRỌNG: Bóc tách \immini ngay trên ex_body TRƯỚC KHI tìm \choice, \choiceTF, \shortans
+    # để xử lý trường hợp \choice nằm lọt bên trong đối số thứ nhất của \immini{... \choice ...}{... tikzpicture ...}
+    ex_body = unwrap_immini(ex_body)
+
     parsed_q = None
 
     tf_match = re.search(r'\\choiceTF(?:t|n)?(?![a-zA-Z])', ex_body)
@@ -409,8 +420,8 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
     sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
 
     if tf_match:
-        stem_raw = ex_body[:tf_match.start()]
-        opts_raw, _ = extract_braced_args(ex_body, tf_match.end(), 4)
+        opts_raw, opts_end = extract_braced_args(ex_body, tf_match.end(), 4)
+        stem_raw = ex_body[:tf_match.start()] + "\n\n" + ex_body[opts_end:]
         statements = []
         for idx, opt in enumerate(opts_raw):
             is_true = bool(re.search(r'\\True\b', opt))
@@ -429,8 +440,8 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
         }
 
     elif mc_match:
-        stem_raw = ex_body[:mc_match.start()]
-        opts_raw, _ = extract_braced_args(ex_body, mc_match.end(), 4)
+        opts_raw, opts_end = extract_braced_args(ex_body, mc_match.end(), 4)
+        stem_raw = ex_body[:mc_match.start()] + "\n\n" + ex_body[opts_end:]
         options = []
         for idx, opt in enumerate(opts_raw):
             is_true = bool(re.search(r'\\True\b', opt))
