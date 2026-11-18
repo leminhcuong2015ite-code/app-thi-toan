@@ -827,6 +827,35 @@ def check_question_health(q):
         return "✅ Hiển thị tốt"
     return " | ".join(issues)
 
+def has_compile_or_latex_error(q):
+    """Kiểm tra câu hỏi có bị Lỗi hình TikZ, Sót lệnh/môi trường LaTeX hoặc chứa \includegraphics không (không tính lỗi chỉ trống lời giải)"""
+    h_str = check_question_health(q)
+    return (
+        "Lỗi hình TikZ" in h_str
+        or "Sót lệnh" in h_str
+        or "Sót môi trường" in h_str
+        or "includegraphics" in h_str
+    )
+
+def build_error_questions_tex(error_records, title="DANH SÁCH CÂU HỎI BỊ LỖI CẦN XỬ LÝ LẠI TRÊN MÁY TÍNH"):
+    """Xuất file .tex chứa nguyên vẹn các khối \begin{ex}...\end{ex} bị lỗi kèm chú thích nguyên nhân lỗi phía trên từng câu"""
+    lines = [
+        "% =====================================================================",
+        f"% {title}",
+        f"% Tổng số câu cần kiểm tra / sửa lại: {len(error_records)} câu",
+        "% =====================================================================",
+        ""
+    ]
+    for idx, rec in enumerate(error_records, 1):
+        q_obj = rec.get("q") or {}
+        reason = rec.get("reason") or check_question_health(q_obj)
+        q_code = q_obj.get("id", f"q_{idx}")
+        tag_id = q_obj.get("tag_id", "Chưa gắn mã")
+        lines.append(f"% --- Câu lỗi #{idx} (Mã gốc: {q_code} | Mã ID: {tag_id}) | Lý do: {reason} ---")
+        lines.append(question_to_latex_block(q_obj))
+        lines.append("")
+    return "\n".join(lines).strip() + "\n" 
+
 def render_question_card(q, index_label):
     """Hiển thị đầy đủ 1 câu hỏi (Đề bài cỡ chữ to 20.5px + Phương án 18px + Lời giải)"""
     sanitize_question_obj(q)
@@ -1947,13 +1976,16 @@ if st.session_state.role == "teacher":
                     dropped_no_id = 0
                     dropped_ext_img = []
 
+                    dropped_ext_img_records = []
                     for q in parsed_qs:
                         q["_uid"] = str(uuid.uuid4())[:8]
                         has_inc, inc_paths = has_external_includegraphics(q)
                         if has_inc:
+                            reason_inc = f"Chứa lệnh chèn ảnh ngoài \\includegraphics{{{chr(44).join(inc_paths)}}}"
                             dropped_ext_img.append(
-                                f"**Câu {q.get('id', '?')}** (Mã ID: `{q.get('tag_id', 'Chưa gắn mã')}`) — Chứa lệnh chèn ảnh ngoài: `\\includegraphics{{{chr(44).join(inc_paths)}}}`"
+                                f"**Câu {q.get('id', '?')}** (Mã ID: `{q.get('tag_id', 'Chưa gắn mã')}`) — `{reason_inc}`"
                             )
+                            dropped_ext_img_records.append({"q": q, "reason": reason_inc})
                             continue
                         sanitize_question_obj(q)
                         if q.get("tag_id") == "Chưa gắn mã":
@@ -1971,12 +2003,14 @@ if st.session_state.role == "teacher":
                     st.session_state["staged_bank_qs"] = processed_qs
                     st.session_state["dropped_no_id_count"] = dropped_no_id
                     st.session_state["dropped_ext_img_list"] = dropped_ext_img
+                    st.session_state["dropped_ext_img_records"] = dropped_ext_img_records
                     st.session_state["staged_file_sig"] = file_sig
                     st.session_state["staged_ver"] = st.session_state.get("staged_ver", 0) + 1
 
             staged_qs = st.session_state.get("staged_bank_qs", [])
             dropped_cnt = st.session_state.get("dropped_no_id_count", 0)
             dropped_img_list = st.session_state.get("dropped_ext_img_list", [])
+            dropped_img_records = st.session_state.get("dropped_ext_img_records", [])
             staged_ver = st.session_state.get("staged_ver", 0)
 
             if dropped_img_list:
@@ -1989,17 +2023,59 @@ if st.session_state.role == "teacher":
                 st.warning(f"🗑️ Đã tự động loại bỏ **{dropped_cnt} câu hỏi** không có mã ID theo tùy chọn của bạn.")
 
             if not staged_qs:
-                st.warning("Không còn câu hỏi nào trong danh sách tạm (toàn bộ câu hỏi trong file đều thiếu mã ID và đã bị loại bỏ).")
+                st.warning("Không còn câu hỏi nào trong danh sách tạm.")
+                if dropped_img_records:
+                    st.download_button(
+                        f"📥 Tải lại file .tex của {len(dropped_img_records)} câu bị loại bỏ (\includegraphics) để sửa trên máy tính",
+                        build_error_questions_tex(dropped_img_records).encode("utf-8"),
+                        "cau_hoi_loi_can_sua_lai.tex",
+                        "text/plain",
+                        use_container_width=True
+                    )
             else:
                 ok_count = sum(1 for q in staged_qs if "✅" in check_question_health(q))
+                compile_err_qs = [q for q in staged_qs if has_compile_or_latex_error(q)]
+                no_sol_only_qs = [q for q in staged_qs if ("✅" not in check_question_health(q)) and (not has_compile_or_latex_error(q))]
                 warn_count = len(staged_qs) - ok_count
                 untagged_count = sum(1 for q in staged_qs if q.get("tag_id") == "Chưa gắn mã")
 
                 st.success(
                     f"✅ Đang giữ trong bộ nhớ tạm **{len(staged_qs)} câu hỏi** — "
-                    f"🟢 Hiển thị tốt: **{ok_count} câu** | 🟠 Cảnh báo hiển thị: **{warn_count} câu** | "
+                    f"🟢 Hiển thị tốt: **{ok_count} câu** | "
+                    f"🔴 Lỗi hình TikZ / Sót lệnh LaTeX: **{len(compile_err_qs)} câu** | "
+                    f"🟡 Chỉ trống lời giải: **{len(no_sol_only_qs)} câu** | "
                     f"🏷️ Chưa gắn mã ID: **{untagged_count} câu**."
                 )
+
+                # Tổng hợp danh sách các câu bị lỗi (bao gồm cả câu lỗi TikZ/Sót lệnh trong danh sách tạm + câu \includegraphics đã bị loại bỏ)
+                all_error_records = list(dropped_img_records) + [
+                    {"q": q, "reason": check_question_health(q)} for q in compile_err_qs
+                ]
+                if all_error_records:
+                    with st.container(border=True):
+                        st.markdown(
+                            f"##### 🛠️ Xử lý nhanh **{len(all_error_records)} câu hỏi bị lỗi** "
+                            f"(`{len(compile_err_qs)}` câu Lỗi TikZ/Sót lệnh trong danh sách tạm + `{len(dropped_img_records)}` câu `\includegraphics`):"
+                        )
+                        err_c1, err_c2 = st.columns(2)
+                        err_c1.download_button(
+                            f"📥 Tải file .tex chứa {len(all_error_records)} câu bị lỗi về máy tính để sửa lại",
+                            build_error_questions_tex(all_error_records).encode("utf-8"),
+                            f"cau_hoi_loi_{bank_tex_file.name}",
+                            "text/plain",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                        if compile_err_qs:
+                            if err_c2.button(
+                                f"🗑️ Loại bỏ ngay {len(compile_err_qs)} câu Lỗi TikZ / Sót lệnh khỏi danh sách tạm",
+                                use_container_width=True
+                            ):
+                                clear_edit_widget_state()
+                                st.session_state["staged_bank_qs"] = [q for q in staged_qs if not has_compile_or_latex_error(q)]
+                                st.session_state["staged_ver"] = staged_ver + 1
+                                st.toast(f"✅ Đã loại bỏ {len(compile_err_qs)} câu bị lỗi hình TikZ / sót lệnh LaTeX!")
+                                st.rerun()
 
                 st.markdown("##### ⚡ Bảng sửa nhanh Mã ID & Tích chọn xóa câu hỏi:")
                 edit_rows = []
@@ -2113,14 +2189,50 @@ if st.session_state.role == "teacher":
                                     st.rerun()
                             st.divider()
 
-                if st.button("📥 Lưu các câu hỏi hợp lệ vào Ngân hàng", type="primary"):
-                    valid_qs = [sanitize_question_obj(q) for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
-                    skipped_untagged = len(staged_qs) - len(valid_qs)
-                    if not valid_qs:
-                        st.error("⚠️ Không có câu hỏi nào có mã ID hợp lệ để lưu! Vui lòng gán mã ID trước khi lưu.")
+                st.markdown("##### 💾 Tùy chọn chế độ lọc trước khi Lưu vào Ngân hàng câu hỏi:")
+                save_filter_mode = st.radio(
+                    "Chọn nhóm câu hỏi bạn muốn nạp vào Ngân hàng:",
+                    [
+                        "🟢 Chỉ lưu các câu HIỂN THỊ TỐT & có Mã ID (Tự động loại bỏ câu Lỗi hình TikZ, Sót lệnh LaTeX và Trống lời giải)",
+                        "🟡 Lưu các câu hiển thị tốt + câu chỉ Trống lời giải (Vẫn tự động loại bỏ câu Lỗi hình TikZ và Sót lệnh LaTeX)",
+                        "🟠 Lưu tất cả các câu đã có Mã ID trong danh sách tạm (Bao gồm cả câu đang có cảnh báo lỗi)"
+                    ],
+                    index=0,
+                    key="bank_save_filter_mode"
+                )
+
+                # Phân loại câu sẽ lưu và câu bị loại bỏ theo chế độ đã chọn
+                candidate_save_qs = []
+                rejected_on_save_records = list(dropped_img_records)
+                for q in staged_qs:
+                    sanitize_question_obj(q)
+                    h_status = check_question_health(q)
+                    is_untagged = (q.get("tag_id") == "Chưa gắn mã")
+                    is_compile_err = has_compile_or_latex_error(q)
+
+                    if is_untagged:
+                        rejected_on_save_records.append({"q": q, "reason": "Chưa gắn Mã ID"})
+                        continue
+                    if save_filter_mode.startswith("🟢"):
+                        if "✅" not in h_status:
+                            rejected_on_save_records.append({"q": q, "reason": h_status})
+                            continue
+                    elif save_filter_mode.startswith("🟡"):
+                        if is_compile_err:
+                            rejected_on_save_records.append({"q": q, "reason": h_status})
+                            continue
+                    candidate_save_qs.append(q)
+
+                if st.button(
+                    f"📥 Lưu {len(candidate_save_qs)} câu hỏi đạt chuẩn vào Ngân hàng (Loại bỏ {len(staged_qs) - len(candidate_save_qs)} câu lỗi/thiếu ID)",
+                    type="primary",
+                    use_container_width=True
+                ):
+                    if not candidate_save_qs:
+                        st.error("⚠️ Không có câu hỏi nào đạt tiêu chuẩn lọc để lưu! Vui lòng kiểm tra lại Mã ID hoặc đổi chế độ lọc.")
                     else:
                         unique_records_map = {}
-                        for q in valid_qs:
+                        for q in candidate_save_qs:
                             full_content_str = (
                                 q["stem"]
                                 + str(q.get("options", ""))
@@ -2150,12 +2262,25 @@ if st.session_state.role == "teacher":
                             for i in range(0, len(db_records), 50):
                                 batch = db_records[i:i + 50]
                                 supabase.table("question_bank").upsert(batch, on_conflict="question_hash").execute()
-                            msg = f"🎉 Đã nạp thành công {len(db_records)} câu hỏi có ID chuẩn vào Ngân hàng!"
-                            if skipped_untagged > 0:
-                                msg += f" (Đã tự động bỏ qua {skipped_untagged} câu chưa được gắn mã ID)."
+                            msg = f"🎉 Đã nạp thành công **{len(db_records)} câu hỏi** vào Ngân hàng!"
+                            if rejected_on_save_records:
+                                msg += f" (Đã tự động loại bỏ **{len(rejected_on_save_records)} câu bị lỗi / thiếu ID** — bạn có thể tải file `.tex` của các câu bị loại bỏ ở ngay nút bên dưới để sửa lại trên máy)."
                             st.success(msg)
+                            st.session_state["last_rejected_tex_content"] = (
+                                build_error_questions_tex(rejected_on_save_records) if rejected_on_save_records else ""
+                            )
+                            st.session_state["last_rejected_tex_count"] = len(rejected_on_save_records)
                         except Exception as e:
                             st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
+
+                if st.session_state.get("last_rejected_tex_content"):
+                    st.download_button(
+                        f"📥 Tải file .tex chứa {st.session_state.get('last_rejected_tex_count', 0)} câu bị lỗi / bị loại bỏ để xử lý lại trên máy tính",
+                        st.session_state["last_rejected_tex_content"].encode("utf-8"),
+                        f"cau_hoi_bi_loai_bo_{bank_tex_file.name}",
+                        "text/plain",
+                        use_container_width=True
+                    )
 
         st.divider()
         st.subheader("🔍 2. Duyệt, Kiểm tra hiển thị, Xuất LaTeX & Sửa/Xóa câu hỏi trong Ngân hàng")
@@ -2248,6 +2373,35 @@ if st.session_state.role == "teacher":
                 "text/plain",
                 use_container_width=True
             )
+
+            db_error_records = [
+                {"q": it["question_data"], "reason": check_question_health(it["question_data"]), "db_id": it["id"]}
+                for it in bank_items
+                if has_compile_or_latex_error(it["question_data"])
+            ]
+            if db_error_records:
+                db_err_c1, db_err_c2 = st.columns(2)
+                db_err_c1.download_button(
+                    f"📥 Tải file .tex riêng {len(db_error_records)} câu đang bị Lỗi TikZ / Sót lệnh trong mục này về máy sửa",
+                    build_error_questions_tex(db_error_records, title=f"CÂU HỎI LỖI KHỐI {b_sel_g} - {b_sel_c}").encode("utf-8"),
+                    f"cau_hoi_loi_K{b_sel_g}_{b_sel_c}.tex",
+                    "text/plain",
+                    use_container_width=True
+                )
+                if db_err_c2.button(
+                    f"🗑️ Xóa toàn bộ {len(db_error_records)} câu bị Lỗi TikZ / Sót lệnh khỏi mục đang lọc",
+                    use_container_width=True
+                ):
+                    for er in db_error_records:
+                        supabase.table("question_bank").delete().eq("id", er["db_id"]).execute()
+                    try:
+                        supabase.rpc("sync_question_bank_seq").execute()
+                    except Exception:
+                        pass
+                    clear_edit_widget_state()
+                    st.session_state["db_ver"] = st.session_state.get("db_ver", 0) + 1
+                    st.success(f"✅ Đã xóa {len(db_error_records)} câu bị lỗi khỏi Ngân hàng!")
+                    st.rerun()
 
             bank_flt1, bank_flt2, bank_flt3 = st.columns([2, 2, 1.5])
             b_status_filter = bank_flt1.selectbox(

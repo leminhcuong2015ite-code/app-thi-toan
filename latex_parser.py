@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V6.1 - tkz-tab BBT, unwrap scalebox/def/dotEX & filter includegraphics"
+PARSER_VERSION = "V6.2 - Fix TikZ Graph/3D \def, tkz-tab BBT, unwrap scalebox & error .tex export"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 
@@ -41,7 +41,7 @@ if not _SYSTEM_HAS_TKZ_TAB and not os.path.exists(_TKZ_TAB_PATH):
 
 
 def extract_braced_args(text, start_pos, num_args):
-    r"""Tách chính xác các cặp ngoặc nhọn {...} có lồng nhau trong LaTeX (bỏ qua mọi tham số [...] và comment %)"""
+    r"""Tách chính xác các cặp ngoặc nhọn {...} có lồng nhau trong LaTeX"""
     args = []
     pos = start_pos
     n = len(text)
@@ -71,12 +71,8 @@ def extract_braced_args(text, start_pos, num_args):
         depth = 0
         arg_start = pos + 1
         while pos < n:
-            if text[pos] == '\\' and pos + 1 < n and text[pos + 1] in ('{', '}', '\\', '%'):
+            if text[pos] == '\\':
                 pos += 2
-                continue
-            if text[pos] == '%':
-                nl = text.find('\n', pos)
-                pos = nl + 1 if nl != -1 else n
                 continue
             if text[pos] == '{':
                 depth += 1
@@ -91,12 +87,15 @@ def extract_braced_args(text, start_pos, num_args):
 
 
 def strip_tex_definitions(text):
-    r"""Xóa triệt để các lệnh định nghĩa macro cục bộ như \def\dotEX{}, \newcommand, \renewcommand, \setlength, \dotEX"""
+    r"""Xóa các lệnh định nghĩa macro cục bộ như \def\dotEX{}, \newcommand, \renewcommand, \setlength, \dotEX
+    LƯU Ý: Chỉ gọi hàm này SAU KHI đã tách và biên dịch xong khối \begin{tikzpicture}...\end{tikzpicture}
+    để KHÔNG làm mất các biến \def\a{...}, \def\h{...}, \def\xmin{...} bên trong hình vẽ TikZ đồ thị và hình không gian!
+    """
     if not text:
         return ""
 
     # 1. Xóa \def, \gdef, \edef, \xdef kèm thân {...} (ví dụ: \def\dotEX{}, \def\boxEX{...})
-    def_pat = re.compile(r'\\(?:g|e|x)?def\s*\\[a-zA-Z@]+(?:#\d)*\s*')
+    def_pat = re.compile(r'\\(?:g|e|x)?def\s*\\[a-zA-Z@]+[^\{;\n]*')
     pos = 0
     while True:
         m = def_pat.search(text, pos)
@@ -105,7 +104,7 @@ def strip_tex_definitions(text):
         end_m = m.end()
         if end_m < len(text) and text[end_m] == '{':
             args, after_pos = extract_braced_args(text, end_m, 1)
-            if args and after_pos > end_m:
+            if args is not None and len(args) == 1 and after_pos > end_m:
                 text = text[:m.start()] + text[after_pos:]
                 pos = m.start()
                 continue
@@ -175,7 +174,7 @@ def unwrap_macro_keep_last_arg(text, macro_name, num_args):
 
 
 def unwrap_all_box_wrappers(text):
-    r"""Bóc tách toàn bộ các lệnh co giãn/đóng khung bao quanh hình TikZ hoặc công thức"""
+    r"""Bóc tách các lệnh co giãn/đóng khung bao quanh hình TikZ hoặc công thức (chạy sau khi đã tách tikzpicture)"""
     if not text:
         return ""
     for _ in range(3):
@@ -191,7 +190,6 @@ def unwrap_all_box_wrappers(text):
         text = unwrap_macro_keep_last_arg(text, 'vtop', 1)
         text = unwrap_macro_keep_last_arg(text, 'makebox', 1)
         text = unwrap_macro_keep_last_arg(text, 'framebox', 1)
-    # Trường hợp còn sót \scalebox{0.8}{} rỗng hoặc \scalebox{0.8} đơn lẻ
     text = re.sub(r'\\scalebox\s*\{[^}]*\}(?:\s*\[[^\]]*\])?\s*\{\s*\}', '', text)
     text = re.sub(r'\\begin\{minipage\}(?:\s*\[[^\]]*\])*\s*\{[^}]*\}', '', text)
     text = re.sub(r'\\end\{minipage\}', '', text)
@@ -199,7 +197,7 @@ def unwrap_all_box_wrappers(text):
 
 
 def compile_latex_snippet_to_svg(latex_snippet):
-    r"""Biên dịch TikZ / Bảng biến thiên tkz-tab bằng pdflatex + tự động co khổ giấy PDF vừa khít hình vẽ + pdf2svg"""
+    r"""Biên dịch TikZ (Đồ thị, Hình không gian, Bảng biến thiên tkz-tab) bằng pdflatex + pdf2svg"""
     if not shutil.which("pdflatex") or not shutil.which("pdf2svg"):
         return '<div style="padding:10px;background:#fff3cd;border:1px solid #ffecb5;border-radius:6px;">⚠️ Máy chủ đang thiếu pdflatex hoặc pdf2svg.</div>'
 
@@ -210,23 +208,20 @@ def compile_latex_snippet_to_svg(latex_snippet):
     snippet_fixed = re.sub(r'\\rq\s*\\rq\s*', "''", snippet_fixed)
     snippet_fixed = re.sub(r'\\lq\b\s*', '`', snippet_fixed)
     snippet_fixed = re.sub(r'\\rq\b\s*', "'", snippet_fixed)
+    # Loại bỏ dòng trống (paragraph break \par) bên trong khối hình để tránh lỗi lrbox của LaTeX
+    snippet_fixed = "\n".join(line for line in snippet_fixed.splitlines() if line.strip())
 
-    # Luôn nạp gói tkz-tab khi có lệnh bảng biến thiên / bảng xét dấu (\tkzTabInit, \tkzTabLine, \tkzTabVar, \tkzTab)
-    extra_pkgs = []
-    if "tkzTab" in snippet_fixed or "tkz-tab" in snippet_fixed:
-        extra_pkgs.append(r"\usepackage{tkz-tab}")
-    if re.search(r'\\tkz(?!Tab|DrawXY)[A-Z]', snippet_fixed):
-        extra_pkgs.append(r"\usepackage{tkz-euclide}")
-    extra_pkg = "\n".join(extra_pkgs)
+    # Chỉ nạp thêm \usepackage{tkz-tab} khi trong hình có lệnh của tkz-tab (giữ nguyên môi trường TikZ chuẩn cho đồ thị & hình không gian)
+    extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed or "tkz-tab" in snippet_fixed) else ""
 
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
         r"\usepackage[utf8]{vietnam}" + "\n"
         r"\usepackage{amsmath,amssymb,amsfonts,xcolor,graphicx}" + "\n"
         r"\usepackage{tikz}" + "\n"
-        r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit}" + "\n"
         + (extra_pkg + "\n" if extra_pkg else "")
-        + r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
+        + r"\usetikzlibrary{shapes.geometric,arrows,calc,intersections,angles,patterns,snakes,positioning,arrows.meta,quotes,backgrounds,decorations,decorations.markings,decorations.pathreplacing,decorations.pathmorphing,shadows,matrix,fit}" + "\n"
+        r"\def\tkzDrawXY{\tkzDrawX\tkzDrawY[>=latex]}" + "\n"
         r"\providecommand{\dotEX}{}" + "\n"
         r"\newcommand{\hoac}[1]{\left[\begin{aligned}#1\end{aligned}\right.}" + "\n"
         r"\newcommand{\heva}[1]{\left\{\begin{aligned}#1\end{aligned}\right.}" + "\n"
@@ -387,7 +382,6 @@ def normalize_math_internals(math_str):
     math_str = math_str.replace('~', r'\,')
 
     # Chuyển "\ " (backslash + khoảng trắng) trong công thức toán thành khoảng trắng chuẩn \, của MathJax
-    # Lưu ý: dùng (?<!\\) để KHÔNG ăn mất dấu backslash thứ hai của lệnh xuống dòng "\\" trong aligned/cases
     math_str = re.sub(r'(?<!\\)\\(?=\s)', r'\\,', math_str)
 
     math_str = re.sub(r'\\vv\*?\s*\{', r'\\overrightarrow{', math_str)
@@ -405,7 +399,6 @@ def normalize_math_internals(math_str):
     math_str = re.sub(r'\\Q\b', r'\\mathbb{Q}', math_str)
     math_str = re.sub(r'\\C\b', r'\\mathbb{C}', math_str)
 
-    # Tự động thêm \displaystyle trước \int nếu chưa có
     math_str = ensure_displaystyle_int(math_str)
 
     for _ in range(3):
@@ -425,11 +418,6 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
-    # Xóa các định nghĩa macro cục bộ (\def\dotEX{}, \renewcommand, ...) và bóc tách \scalebox{0.8}{...}, \resizebox
-    text = strip_tex_definitions(text)
-    text = unwrap_immini(text)
-    text = unwrap_all_box_wrappers(text)
-
     # Loại bỏ ngay \allowdisplaybreaks (kể cả có tham số [1]..[4]) và các lệnh cấu hình đặt ngoài công thức toán
     text = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', text)
     text = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', text)
@@ -443,11 +431,14 @@ def clean_latex_to_markdown(text):
     text = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", text)
     text = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", text)
 
+    text = unwrap_immini(text)
     text = unwrap_textcolor(text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
 
+    # QUAN TRỌNG: Tách và biên dịch khối hình \begin{tikzpicture}...\end{tikzpicture} TRƯỚC KHI xóa \def hoặc bóc \scalebox
+    # để giữ nguyên vẹn mọi biến \def\a{...}, \def\h{...}, \def\xmin{...} bên trong hình vẽ đồ thị và hình không gian!
     visual_pattern = re.compile(
-        r'(?:\\tikzset\s*\{[^}]*\}\s*)*\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
+        r'\\begin\{(tikzpicture|tabular|tabularx|tabvar)\}.*?\\end\{\1\}',
         re.DOTALL
     )
     visual_placeholders = {}
@@ -460,12 +451,12 @@ def clean_latex_to_markdown(text):
 
     text = visual_pattern.sub(_visual_repl, text)
 
-    # Sau khi đã tách tikzpicture, bóc tiếp nếu còn \scalebox bao quanh placeholder và xóa \color, \tikzset ngoài hình
+    # SAU KHI khối tikzpicture đã biến thành @@VISUAL_0@@, mới bóc \scalebox{0.8}{@@VISUAL_0@@} -> @@VISUAL_0@@
+    # và xóa các lệnh \def\dotEX{}, \dotEX, \tikzset, \color bên ngoài hình vẽ
     text = unwrap_all_box_wrappers(text)
     text = strip_tex_definitions(text)
     text = re.sub(r'\\color\s*\{[^}]*\}', '', text)
 
-    # Xóa \tikzset{...} còn sót bên ngoài tikzpicture
     tikzset_pat = re.compile(r'\\tikzset\b')
     pos = 0
     while True:
@@ -566,17 +557,13 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'heva', r'$$\left\{\begin{aligned}', r'\end{aligned}\right.$$')
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
-    # QUAN TRỌNG: Chuyển lệnh xuống dòng "\\" (kể cả "\\[2mm]", "\\*") và \newline, \par thành <br>
-    # TRƯỚC KHI chạy regex xóa khoảng trắng "\ " để không bị ăn mất dấu "\" thứ hai của "\\"
     text = re.sub(r'\\\\\*?(?:\s*\[[^\]]*\])?', '<br>\n', text)
     text = re.sub(r'\\(newline|par)\b', '<br>\n', text)
 
-    # Xóa \displaystyle bị đặt thừa bên ngoài công thức toán
     text = re.sub(r'\\displaystyle\b', '', text)
 
     text = text.replace('{,}', ',').replace('~', ' ')
     text = re.sub(r'\\(dots|ldots|cdots)\b', '...', text)
-    # Chuyển "\ ", "\,", "\;", "\!", "\:", "\quad", "\qquad", "\enspace", "\thinspace" ngoài môi trường toán thành khoảng trắng thường
     text = re.sub(r'(?<!\\)\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', text)
     text = text.replace('``', '"').replace("''", '"')
     text = text.replace(r'\%', '%').replace(r'\&', '&')
@@ -607,11 +594,6 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
     inc_paths = re.findall(r'\\includegraphics(?![a-zA-Z])\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}', ex_body)
     has_ext_img = bool(inc_paths or re.search(r'\\includegraphics(?![a-zA-Z])', ex_body))
 
-    # Xóa các định nghĩa \def\dotEX{} và bóc \immini, \scalebox ngay trên ex_body
-    ex_body = strip_tex_definitions(ex_body)
-    ex_body = unwrap_immini(ex_body)
-    ex_body = unwrap_all_box_wrappers(ex_body)
-
     loigiai_raw = ""
     lg_match = re.search(r'\\loi?giai\s*(?:\[.*?\])?\s*\{', ex_body)
     if lg_match:
@@ -621,12 +603,11 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
-    # Bóc lại \immini và \scalebox một lần nữa nếu nằm bên ngoài/sau khi tách lời giải
+    # Chỉ bóc tách \immini trên ex_body trước khi tìm \choice, \choiceTF, \shortans
+    # KHÔNG chạy strip_tex_definitions ở đây để bảo toàn \def\a{...}, \def\h{...} bên trong \begin{tikzpicture}
     ex_body = unwrap_immini(ex_body)
-    ex_body = unwrap_all_box_wrappers(ex_body)
 
     if has_ext_img:
-        # Không biên dịch TikZ cho các câu chứa \includegraphics để tiết kiệm thời gian và báo lỗi loại bỏ ngay
         parsed_q = {
             "id": f"q_{index}",
             "part": 1,
