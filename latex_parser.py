@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.2 - Fix LaTeX Spaces, Quotes & Support Tự Luận (bt/ex)"
+PARSER_VERSION = "V5.3 - Fix LaTeX Quotes, Backslash Spaces & Auto-Reload"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -245,11 +245,13 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
-    # Xử lý các dấu ngoặc kép \lq\lq và \rq\rq ngay từ đầu
-    text = re.sub(r'\\lq\s*\\lq\s*', '"', text)
-    text = re.sub(r'\\rq\s*\\rq\s*', '"', text)
-    text = re.sub(r'\\lq\b\s*', "'", text)
-    text = re.sub(r'\\rq\b\s*', "'", text)
+    # Xử lý các dấu ngoặc kép \lq\lq và \rq\rq kèm lệnh cách "\ " ngay sau nó
+    text = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', text)
+    text = re.sub(r'\s*\\rq\s*\\rq\\\s+', '" ', text)
+    text = re.sub(r'\s*\\rq\s*\\rq', '"', text)
+    text = re.sub(r'\\lq(?![a-zA-Z])(?:\\\s+|\s*)', "'", text)
+    text = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", text)
+    text = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", text)
 
     text = unwrap_immini(text)
     text = re.sub(r'\\begin\{multicols\}\{\d+\}|\\end\{multicols\}', '', text)
@@ -269,7 +271,7 @@ def clean_latex_to_markdown(text):
     text = visual_pattern.sub(_visual_repl, text)
 
     text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
-    text = re.sub(r'\\(noindent|par|centering|leavevmode|vfill|hfill|newpage|clearpage)\b', '', text)
+    text = re.sub(r'\\(noindent|par|centering|leavevmode|vfill|hfill|newpage|clearpage|smallskip|medskip|bigskip)\b', '', text)
     text = re.sub(r'\\(vspace|hspace)\*?\{.*?\}', ' ', text)
 
     text = re.sub(r'\\\[(.*?)\\\]', r'\n$$\1$$\n', text, flags=re.DOTALL)
@@ -332,8 +334,8 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
     text = text.replace('{,}', ',').replace('~', ' ')
-    # Chuyển "\ ", "\,", "\;", "\!", "\quad", "\qquad" ngoài môi trường toán thành khoảng trắng thường
-    text = re.sub(r'\\(\s+|,|;|!|quad\b|qquad\b)', ' ', text)
+    # Chuyển "\ ", "\,", "\;", "\!", "\:", "\quad", "\qquad", "\enspace", "\thinspace" ngoài môi trường toán thành khoảng trắng thường
+    text = re.sub(r'\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', text)
     text = text.replace('``', '"').replace("''", '"')
     text = re.sub(r'\\\\(\s*\[.*?\])?', '\n\n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
@@ -360,16 +362,17 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
     ex_body = re.sub(r'(?<!\\)%.*', '', block_body_with_comments)
 
     loigiai_raw = ""
-    lg_match = re.search(r'\\loi?giai\s*\{', ex_body)
+    lg_match = re.search(r'\\loi?giai\s*(?:\[.*?\])?\s*\{', ex_body)
     if lg_match:
-        lg_args, lg_end = extract_braced_args(ex_body, lg_match.end() - 1, 1)
+        brace_pos = ex_body.find('{', lg_match.start())
+        lg_args, lg_end = extract_braced_args(ex_body, brace_pos, 1)
         if lg_args:
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
     parsed_q = None
 
-    tf_match = re.search(r'\\choiceTF(?![a-zA-Z])', ex_body)
+    tf_match = re.search(r'\\choiceTF(?:t|n)?(?![a-zA-Z])', ex_body)
     mc_match = re.search(r'\\(choice|motcot|haicot|boncot)(?![a-zA-Z])', ex_body)
     sa_match = re.search(r'\\shortans\s*(\[.*?\])?\s*\{', ex_body)
 
