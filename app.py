@@ -261,11 +261,27 @@ def clean_leftover_spaces(txt):
     return txt.strip()
 
 def sanitize_question_obj(q):
-    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (cả câu mới nạp và câu cũ trong kho)"""
+    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (tự động biên dịch lại nếu câu cũ bị sót \immini)"""
     if not q:
         return q
     if "_uid" not in q:
         q["_uid"] = str(uuid.uuid4())[:8]
+
+    # Tự động phục hồi câu hỏi cũ bị kẹt \immini (do \choice nằm trong \immini ở phiên bản trước) nếu có sẵn raw_tex
+    if r"\immini" in q.get("stem", "") and q.get("raw_tex"):
+        try:
+            reparsed_list = parse_exam_tex(q["raw_tex"])
+            if reparsed_list:
+                rp = reparsed_list[0]
+                q["stem"] = rp.get("stem", q["stem"])
+                q["solution"] = rp.get("solution", q.get("solution", ""))
+                if "options" in rp:
+                    q["options"] = rp["options"]
+                if "statements" in rp:
+                    q["statements"] = rp["statements"]
+        except Exception:
+            pass
+
     q["stem"] = clean_leftover_spaces(q.get("stem", ""))
     q["solution"] = clean_leftover_spaces(q.get("solution", ""))
     if q.get("part") == 1:
