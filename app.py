@@ -7,7 +7,15 @@ import datetime
 import re
 import hashlib
 import io
-from latex_parser import parse_exam_tex, clean_latex_to_markdown
+import importlib
+import kntt_mapping
+import latex_parser
+
+# Tự động nạp lại module phụ mỗi khi cập nhật code trên GitHub mà không cần Reboot app
+importlib.reload(kntt_mapping)
+importlib.reload(latex_parser)
+
+from latex_parser import parse_exam_tex, clean_latex_to_markdown, PARSER_VERSION
 from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
 
 st.set_page_config(page_title="Hệ thống Kiểm tra Trực tuyến - Toán Phổ Thông", layout="wide", page_icon="📐")
@@ -204,9 +212,37 @@ def read_student_file_safe(uploaded_file):
 
     return pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8", errors="replace")
 
-# ================= HÀM KIỂM TRA TRẠNG THÁI HIỂN THỊ & DỰNG THẺ CÂU HỎI =================
+# ================= HÀM LÀM SẠCH LỆNH KHOẢNG TRẮNG & KIỂM TRA TRẠNG THÁI HIỂN THỊ =================
+def clean_leftover_spaces(txt):
+    """Làm sạch các lệnh ngoặc kép (\lq\lq, \rq\rq) và khoảng trắng LaTeX (\ , \, , \quad) bị sót"""
+    if not txt:
+        return ""
+    txt = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', txt)
+    txt = re.sub(r'\s*\\rq\s*\\rq\\\s+', '" ', txt)
+    txt = re.sub(r'\s*\\rq\s*\\rq', '"', txt)
+    txt = re.sub(r'\\lq(?![a-zA-Z])(?:\\\s+|\s*)', "'", txt)
+    txt = re.sub(r'\s*\\rq(?![a-zA-Z])\\\s+', "' ", txt)
+    txt = re.sub(r'\s*\\rq(?![a-zA-Z])', "'", txt)
+    txt = re.sub(r'\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', txt)
+    return txt
+
+def sanitize_question_obj(q):
+    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (cả câu mới nạp và câu cũ trong kho)"""
+    if not q:
+        return q
+    q["stem"] = clean_leftover_spaces(q.get("stem", ""))
+    q["solution"] = clean_leftover_spaces(q.get("solution", ""))
+    if q.get("part") == 1:
+        for o in q.get("options", []):
+            o["text"] = clean_leftover_spaces(o.get("text", ""))
+    elif q.get("part") == 2:
+        for s in q.get("statements", []):
+            s["text"] = clean_leftover_spaces(s.get("text", ""))
+    return q
+
 def check_question_health(q):
     """Kiểm tra xem câu hỏi và lời giải sau khi biên dịch có lỗi TikZ hay sót lệnh ex_test không"""
+    sanitize_question_obj(q)
     issues = []
     full_rendered = q.get("stem", "") + " " + q.get("solution", "")
     if q.get("part") == 1:
@@ -226,16 +262,10 @@ def check_question_health(q):
     if not issues:
         return "✅ Hiển thị tốt"
     return " | ".join(issues)
-def clean_leftover_spaces(txt):
-    """Làm sạch các lệnh khoảng trắng LaTeX (\ , \, , \quad) bị sót ngoài công thức toán"""
-    if not txt:
-        return ""
-    txt = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', txt)
-    # Thay thế "\ " bằng khoảng trắng thường (nếu ngoài $) hoặc \, (nếu trong $)
-    txt = re.sub(r'\\(\s+)', ' ', txt)
-    return txt
+
 def render_question_card(q, index_label):
     """Hiển thị đầy đủ 1 câu hỏi (Đề bài + Phương án + Lời giải) đảm bảo dịch MathJax 100%"""
+    sanitize_question_obj(q)
     status_str = check_question_health(q)
     st_bg = "#dcfce7" if "✅" in status_str else "#fef2f2"
     st_fg = "#166534" if "✅" in status_str else "#991b1b"
@@ -258,7 +288,7 @@ def render_question_card(q, index_label):
         unsafe_allow_html=True
     )
 
-    stem_disp = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', q.get("stem", ""))
+    stem_disp = clean_leftover_spaces(q.get("stem", ""))
     st.markdown(stem_disp, unsafe_allow_html=True)
 
     if part_num == 1:
@@ -269,7 +299,7 @@ def render_question_card(q, index_label):
             icon = "✅" if is_t else "⚪"
             lbl = labels[idx] if idx < 4 else str(idx + 1)
             box_cls = "opt-box-true" if is_t else "opt-box-false"
-            opt_txt = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', opt.get("text", ""))
+            opt_txt = clean_leftover_spaces(opt.get("text", ""))
             cols[idx % 2].markdown(
                 f'<div class="{box_cls}">\n\n{icon} **{lbl}.** {opt_txt}\n\n</div>',
                 unsafe_allow_html=True
@@ -279,14 +309,14 @@ def render_question_card(q, index_label):
         for idx, st_i in enumerate(q.get("statements", [])):
             badge = "🟢 **[Đúng]**" if st_i.get("is_true") else "🔴 **[Sai]**"
             lbl = st_labels[idx] if idx < 4 else f"{idx+1})"
-            st_txt = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', st_i.get("text", ""))
+            st_txt = clean_leftover_spaces(st_i.get("text", ""))
             st.markdown(f"- **{lbl}** {st_txt} $\\longrightarrow$ {badge}", unsafe_allow_html=True)
     elif part_num == 3:
         st.markdown(f"🔑 **Đáp số trả lời ngắn:** `{q.get('short_ans', '')}`")
     elif part_num == 4:
         st.markdown("✍️ **Dạng câu hỏi:** *Bài tập Tự luận (Trình bày lời giải chi tiết)*")
 
-    sol_text = re.sub(r'\\lq\s*\\lq\s*|\\rq\s*\\rq\s*', '"', q.get("solution", "").strip())
+    sol_text = clean_leftover_spaces(q.get("solution", "").strip())
     if sol_text:
         st.markdown(
             f'<div class="solution-box">\n\n📖 **Lời giải chi tiết:**\n\n{sol_text}\n\n</div>',
@@ -302,8 +332,8 @@ def apply_quick_edit_to_question(q, new_tag_str, new_stem_md, new_sol_md, new_sh
         q.update(meta)
     else:
         q["tag_id"] = new_tag_str.strip()
-    q["stem"] = new_stem_md.strip()
-    q["solution"] = new_sol_md.strip()
+    q["stem"] = clean_leftover_spaces(new_stem_md.strip())
+    q["solution"] = clean_leftover_spaces(new_sol_md.strip())
     if q.get("part") == 3 and new_short_ans is not None:
         q["short_ans"] = new_short_ans.strip().replace(".", ",")
     full_str = (
@@ -322,10 +352,10 @@ def extract_grade_from_class(class_name):
 
 def get_shuffled_exam(questions, seed):
     rng = random.Random(seed)
-    p1 = [q.copy() for q in questions if q.get("part") == 1]
-    p2 = [q.copy() for q in questions if q.get("part") == 2]
-    p3 = [q.copy() for q in questions if q.get("part") == 3]
-    p4 = [q.copy() for q in questions if q.get("part") == 4]
+    p1 = [sanitize_question_obj(q.copy()) for q in questions if q.get("part") == 1]
+    p2 = [sanitize_question_obj(q.copy()) for q in questions if q.get("part") == 2]
+    p3 = [sanitize_question_obj(q.copy()) for q in questions if q.get("part") == 3]
+    p4 = [sanitize_question_obj(q.copy()) for q in questions if q.get("part") == 4]
 
     rng.shuffle(p1)
     rng.shuffle(p2)
@@ -570,7 +600,7 @@ def find_replacement_question(current_q, all_exam_qs):
     if not candidates:
         return None
 
-    chosen = random.choice(candidates)["question_data"].copy()
+    chosen = sanitize_question_obj(random.choice(candidates)["question_data"].copy())
     chosen["id"] = current_q["id"]
     return chosen
 
@@ -761,6 +791,7 @@ with st.sidebar:
         st.write(f"🏫 Lớp: **{st.session_state.user['class_name']}** (Khối {stu_grade})")
     else:
         st.write("👨‍🏫 **Chế độ Giáo viên Quản trị**")
+        st.caption(f"⚙️ Bộ biên dịch: `{PARSER_VERSION}`")
     if st.button("🚪 Đăng xuất"):
         st.session_state.role = None
         st.session_state.user = None
@@ -809,7 +840,7 @@ if st.session_state.role == "teacher":
         bank_tex_file = st.file_uploader("Chọn file .tex hoặc .txt chứa danh sách câu hỏi", type=["tex", "txt"], key="bank_up")
 
         if bank_tex_file:
-            file_sig = f"{bank_tex_file.name}_{bank_tex_file.size}_{missing_id_mode}_{fb_grade}_{fb_chap_code}_{fb_lesson_code}_{fb_lvl_code}"
+            file_sig = f"{PARSER_VERSION}_{bank_tex_file.name}_{bank_tex_file.size}_{missing_id_mode}_{fb_grade}_{fb_chap_code}_{fb_lesson_code}_{fb_lvl_code}"
             if st.session_state.get("staged_file_sig") != file_sig:
                 raw_bank_tex = bank_tex_file.read().decode("utf-8", errors="ignore")
                 with st.spinner("Đang biên dịch LaTeX/TikZ và kiểm tra mã ID câu hỏi..."):
@@ -818,6 +849,7 @@ if st.session_state.role == "teacher":
                     dropped_no_id = 0
 
                     for q in parsed_qs:
+                        sanitize_question_obj(q)
                         if q.get("tag_id") == "Chưa gắn mã":
                             if missing_id_mode.startswith("🗑️"):
                                 dropped_no_id += 1
@@ -957,7 +989,7 @@ if st.session_state.role == "teacher":
                             st.divider()
 
                 if st.button("📥 Lưu các câu hỏi hợp lệ vào Ngân hàng", type="primary"):
-                    valid_qs = [q for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
+                    valid_qs = [sanitize_question_obj(q) for q in staged_qs if q.get("tag_id") != "Chưa gắn mã"]
                     skipped_untagged = len(staged_qs) - len(valid_qs)
                     if not valid_qs:
                         st.error("⚠️ Không có câu hỏi nào có mã ID hợp lệ để lưu! Vui lòng gán mã ID trước khi lưu.")
@@ -1284,7 +1316,7 @@ if st.session_state.role == "teacher":
                                         pool = lesson_pools[b_code][p_idx][lvl]
                                         chosen_items = random.sample(pool, need_cnt)
                                         for item in chosen_items:
-                                            q_copy = item["question_data"].copy()
+                                            q_copy = sanitize_question_obj(item["question_data"].copy())
                                             q_copy["id"] = f"q_{len(selected_qs) + 1}"
                                             selected_qs.append(q_copy)
 
@@ -1381,7 +1413,7 @@ if st.session_state.role == "teacher":
         if tex_file:
             raw_tex = tex_file.read().decode("utf-8", errors="ignore")
             with st.spinner("Đang phân tích cấu trúc LaTeX và biên dịch hình vẽ TikZ..."):
-                parsed_questions = parse_exam_tex(raw_tex)
+                parsed_questions = [sanitize_question_obj(q) for q in parse_exam_tex(raw_tex)]
 
             p1_cnt = sum(1 for q in parsed_questions if q["part"] == 1)
             p2_cnt = sum(1 for q in parsed_questions if q["part"] == 2)
@@ -1510,7 +1542,6 @@ if st.session_state.role == "teacher":
 
                 if st.button("➕ Nhập toàn bộ danh sách vào hệ thống", type="primary"):
                     records = []
-                    # Hỗ trợ nhận diện cột theo tên hoặc theo vị trí 4 cột đầu tiên nếu cột bị lệch dấu
                     cols = list(df.columns)
                     col_name = "Họ tên" if "Họ tên" in cols else cols[0]
                     col_cls = "Lớp" if "Lớp" in cols else cols[1]
@@ -1635,7 +1666,7 @@ if st.session_state.role == "teacher":
                         format_func=lambda x: f"{x['username']} - {(x.get('students') or {}).get('full_name', '')} (Lớp {(x.get('students') or {}).get('class_name', '')} | Rời màn hình: {x['tab_switches']} lần)"
                     )
                     if chosen_sub:
-                        p4_qs = [q for q in selected_exam["questions"] if q.get("part") == 4]
+                        p4_qs = [sanitize_question_obj(q) for q in selected_exam["questions"] if q.get("part") == 4]
                         if p4_qs:
                             st.markdown("#### ✍️ Bài làm Tự luận của học sinh:")
                             stu_ans = chosen_sub.get("answers") or {}
