@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V5.5 - Fix immini Wrapping choice/choiceTF/shortans & allowdisplaybreaks"
+PARSER_VERSION = "V6.0 - Linebreaks, listEX/lisEX, displaystyle int & LaTeX Export"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 if not os.path.exists(_TKZ_TAB_PATH):
@@ -166,7 +166,7 @@ def compile_latex_snippet_to_svg(latex_snippet):
 def unwrap_immini(text):
     r"""Tách cấu trúc \immini và \immini[thm] của gói ex_test (kể cả khi \choice nằm bên trong \immini)"""
     pattern = re.compile(r'\\immini(thm)?(?![a-zA-Z])')
-    choice_Split_pat = re.compile(r'\\(choiceTF(?:t|n)?|choice|motcot|haicot|boncot|shortans)(?![a-zA-Z])')
+    choice_split_pat = re.compile(r'\\(choiceTF(?:t|n)?|choice|motcot|haicot|boncot|shortans)(?![a-zA-Z])')
     search_pos = 0
     while True:
         m = pattern.search(text, search_pos)
@@ -177,8 +177,7 @@ def unwrap_immini(text):
             search_pos = m.end()
             continue
         arg0, arg1 = args[0], args[1]
-        # Nếu bên trong arg0 có chứa \choice / \choiceTF / \shortans thì chèn hình vẽ (arg1) vào ngay trước \choice
-        cm = choice_Split_pat.search(arg0)
+        cm = choice_split_pat.search(arg0)
         if cm:
             combined = arg0[:cm.start()].strip() + "\n\n" + arg1.strip() + "\n\n" + arg0[cm.start():].strip()
         else:
@@ -228,16 +227,28 @@ def replace_macro_one_arg(text, macro_name, prefix, suffix):
     return text
 
 
+def ensure_displaystyle_int(math_str):
+    r"""Tự động thêm \displaystyle trước \int nếu chưa có \displaystyle\int"""
+    if not math_str or r"\int" not in math_str:
+        return math_str
+    return re.sub(
+        r'(?<!\\displaystyle)(?<!\\displaystyle\s)(?<!\\displaystyle\s\s)\\int(?![a-zA-Z])',
+        r'\\displaystyle\\int',
+        math_str
+    )
+
+
 def normalize_math_internals(math_str):
     r"""Chuẩn hóa mọi ký hiệu toán bên trong $...$ hoặc $$...$$ sang chuẩn MathJax"""
     math_str = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', math_str)
-    math_str = re.sub(r'\\(displaystyle|limits|nolimits|boldmath|unboldmath)\b', '', math_str)
+    math_str = re.sub(r'\\(boldmath|unboldmath)\b', '', math_str)
     math_str = math_str.replace('{,}', ',')
     math_str = math_str.replace(r'\mathrm{~d}', r'\,\mathrm{d}')
     math_str = math_str.replace('~', r'\,')
 
     # Chuyển "\ " (backslash + khoảng trắng) trong công thức toán thành khoảng trắng chuẩn \, của MathJax
-    math_str = re.sub(r'\\(?=\s)', r'\\,', math_str)
+    # Lưu ý: dùng (?<!\\) để KHÔNG ăn mất dấu backslash thứ hai của lệnh xuống dòng "\\" trong aligned/cases
+    math_str = re.sub(r'(?<!\\)\\(?=\s)', r'\\,', math_str)
 
     math_str = re.sub(r'\\vv\*?\s*\{', r'\\overrightarrow{', math_str)
     math_str = re.sub(r'\\vec\b', r'\\overrightarrow', math_str)
@@ -253,6 +264,9 @@ def normalize_math_internals(math_str):
     math_str = re.sub(r'\\Z\b', r'\\mathbb{Z}', math_str)
     math_str = re.sub(r'\\Q\b', r'\\mathbb{Q}', math_str)
     math_str = re.sub(r'\\C\b', r'\\mathbb{C}', math_str)
+
+    # Tự động thêm \displaystyle trước \int nếu chưa có
+    math_str = ensure_displaystyle_int(math_str)
 
     for _ in range(3):
         math_str = replace_macro_one_arg(math_str, 'heva', r'\left\{\begin{aligned}', r'\end{aligned}\right.')
@@ -271,10 +285,10 @@ def clean_latex_to_markdown(text):
     text = text.replace('\t', ' ').replace('\xa0', ' ')
     text = "\n".join(line.strip() for line in text.splitlines())
 
-    # Loại bỏ ngay \allowdisplaybreaks (kể cả có tham số [1]..[4]) và các lệnh cấu hình hiển thị đặt ngoài công thức toán
+    # Loại bỏ ngay \allowdisplaybreaks (kể cả có tham số [1]..[4]) và các lệnh cấu hình đặt ngoài công thức toán
     text = re.sub(r'\\allowdisplaybreaks(\s*\[\d*\])?', '', text)
     text = re.sub(r'\\everymath\s*\{\s*\\displaystyle\s*\}', '', text)
-    text = re.sub(r'\\(displaystyle|boldmath|unboldmath)\b', '', text)
+    text = re.sub(r'\\(boldmath|unboldmath)\b', '', text)
 
     # Xử lý các dấu ngoặc kép \lq\lq và \rq\rq kèm lệnh cách "\ " ngay sau nó
     text = re.sub(r'\\lq\s*\\lq(?:\\\s+|\s*)', '"', text)
@@ -305,7 +319,7 @@ def clean_latex_to_markdown(text):
 
     text = re.sub(r'\\begin\{(center|flushleft|flushright)\}|\\end\{(center|flushleft|flushright)\}', '', text)
     text = re.sub(
-        r'\\(noindent|indent|par|centering|raggedright|raggedleft|leavevmode|vfill|hfill|dotfill|hrulefill|newpage|clearpage|pagebreak|nopagebreak|linebreak|nolinebreak|smallskip|medskip|bigskip|tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|bfseries|itshape|upshape|normalfont|selectfont)\b',
+        r'\\(noindent|indent|centering|raggedright|raggedleft|leavevmode|vfill|hfill|dotfill|hrulefill|newpage|clearpage|pagebreak|nopagebreak|linebreak|nolinebreak|smallskip|medskip|bigskip|tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|bfseries|itshape|upshape|normalfont|selectfont)\b',
         '',
         text
     )
@@ -331,12 +345,31 @@ def clean_latex_to_markdown(text):
         for idx, p in enumerate(parts[1:]):
             lbl = labels[idx] if idx < 4 else f"{idx+1})"
             p_clean = " ".join(line.strip() for line in p.strip().splitlines() if line.strip())
-            new_text += f"\n\n- **{lbl}** {p_clean}"
+            new_text += f"<br>• **{lbl}** {p_clean}"
         text = new_text
 
-    text = re.sub(r'\\begin\{(enumerate|itemize)\}(\[.*?\])?', '', text)
-    text = re.sub(r'\\end\{(enumerate|itemize)\}', '', text)
-    text = re.sub(r'\\item\b(\s*\[.*?\])?', '\n- ', text)
+    # Xử lý môi trường danh sách: enumerate, itemize, listEX, lisEX (kể cả gõ nhầm lisEX), enumEX, tasks
+    text = re.sub(
+        r'\\begin\{(enumerate|itemize|listEX|lisEX|enumEX|tasks|inparaenum|compactenum|compactitem|description)\}\s*(\[[^\]]*\]|\([^)]*\))?',
+        '\n',
+        text,
+        flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r'\\end\{(enumerate|itemize|listEX|lisEX|enumEX|tasks|inparaenum|compactenum|compactitem|description)\}',
+        '\n',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    def _item_repl(m):
+        opt_lbl = m.group(1)
+        if opt_lbl:
+            lbl_clean = opt_lbl.strip()[1:-1].strip()
+            return f"<br><b>{lbl_clean}</b> "
+        return "<br>• "
+
+    text = re.sub(r'\\(?:item|task)\b(\s*\[[^\]]*\])?\s*', _item_repl, text)
 
     for _ in range(2):
         text = replace_macro_one_arg(text, 'textbf', '**', '**')
@@ -371,15 +404,23 @@ def clean_latex_to_markdown(text):
         text = replace_macro_one_arg(text, 'heva', r'$$\left\{\begin{aligned}', r'\end{aligned}\right.$$')
         text = replace_macro_one_arg(text, 'hoac', r'$$\left[\begin{aligned}', r'\end{aligned}\right.$$')
 
+    # QUAN TRỌNG: Chuyển lệnh xuống dòng "\\" (kể cả "\\[2mm]", "\\*") và \newline, \par thành <br>
+    # TRƯỚC KHI chạy regex xóa khoảng trắng "\ " để không bị ăn mất dấu "\" thứ hai của "\\"
+    text = re.sub(r'\\\\\*?(?:\s*\[[^\]]*\])?', '<br>\n', text)
+    text = re.sub(r'\\(newline|par)\b', '<br>\n', text)
+
+    # Xóa \displaystyle bị đặt thừa bên ngoài công thức toán
+    text = re.sub(r'\\displaystyle\b', '', text)
+
     text = text.replace('{,}', ',').replace('~', ' ')
     text = re.sub(r'\\(dots|ldots|cdots)\b', '...', text)
     # Chuyển "\ ", "\,", "\;", "\!", "\:", "\quad", "\qquad", "\enspace", "\thinspace" ngoài môi trường toán thành khoảng trắng thường
-    text = re.sub(r'\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', text)
+    text = re.sub(r'(?<!\\)\\(\s+|,|;|!|:|quad\b|qquad\b|enspace\b|thinspace\b)', ' ', text)
     text = text.replace('``', '"').replace("''", '"')
-    text = re.sub(r'\\\\(\s*\[.*?\])?', '\n\n', text)
     text = text.replace(r'\%', '%').replace(r'\&', '&')
 
     text = "\n".join(line.strip() for line in text.splitlines())
+    text = re.sub(r'^(<br>\s*)+|(<br>\s*)+$', '', text.strip())
 
     for k, val in math_blocks.items():
         text = text.replace(k, val)
@@ -409,8 +450,7 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
             loigiai_raw = lg_args[0]
             ex_body = ex_body[:lg_match.start()] + ex_body[lg_end:]
 
-    # QUAN TRỌNG: Bóc tách \immini ngay trên ex_body TRƯỚC KHI tìm \choice, \choiceTF, \shortans
-    # để xử lý trường hợp \choice nằm lọt bên trong đối số thứ nhất của \immini{... \choice ...}{... tikzpicture ...}
+    # Bóc tách \immini ngay trên ex_body TRƯỚC KHI tìm \choice, \choiceTF, \shortans
     ex_body = unwrap_immini(ex_body)
 
     parsed_q = None
@@ -484,6 +524,7 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
             }
 
     if parsed_q:
+        parsed_q["_parser_ver"] = PARSER_VERSION
         parsed_q["raw_tex"] = f"\\begin{{{env_type}}}" + block_body_with_comments + f"\\end{{{env_type}}}"
         full_str = (
             parsed_q["stem"]
