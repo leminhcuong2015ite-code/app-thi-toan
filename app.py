@@ -467,6 +467,30 @@ def run_with_retry(fn, retries=3, delay=1.2):
                 time.sleep(delay * (attempt + 1))
     raise last_err
 
+def upsert_bank_batch_http1(records_batch, timeout_sec=15):
+    """Gửi lô câu hỏi lên Supabase qua HTTP/1.1 thuần (Connection: close) để tránh hoàn toàn lỗi treo socket HTTP/2 khi nạp trên 70-80 câu"""
+    import json as _json
+    import urllib.request as _ureq
+    url = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/question_bank?on_conflict=question_hash"
+    key = st.secrets["SUPABASE_KEY"]
+    payload_str = _json.dumps(records_batch, ensure_ascii=False).replace("\u0000", "")
+    payload_bytes = payload_str.encode("utf-8")
+    req = _ureq.Request(
+        url,
+        data=payload_bytes,
+        method="POST",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+            "Connection": "close"
+        }
+    )
+    with _ureq.urlopen(req, timeout=timeout_sec) as resp:
+        resp.read()
+    return True
+
 try:
     supabase = init_db()
 except Exception:
@@ -2408,14 +2432,13 @@ if st.session_state.role == "teacher":
                         failed_records = []
                         total_rec = len(db_records)
 
-                        # Chia lô thông minh theo DUNG LƯỢNG thực tế (tối đa 5 câu và không quá 250 KB mỗi lượt gửi)
-                        # để không bao giờ vượt ngưỡng statement_timeout 8 giây của Supabase Free khi gặp hình TikZ SVG nặng
+                        # Chia lô thông minh theo dung lượng thực tế (tối đa 5 câu và <= 200 KB) và gửi qua HTTP/1.1 thuần (không bị treo HTTP/2)
                         smart_batches = []
                         cur_batch = []
                         cur_bytes = 0
                         for rec in db_records:
                             rec_bytes = len(_json.dumps(rec, ensure_ascii=False).encode("utf-8"))
-                            if cur_batch and (len(cur_batch) >= 5 or cur_bytes + rec_bytes > 250_000):
+                            if cur_batch and (len(cur_batch) >= 5 or cur_bytes + rec_bytes > 200_000):
                                 smart_batches.append(cur_batch)
                                 cur_batch = []
                                 cur_bytes = 0
@@ -2424,13 +2447,13 @@ if st.session_state.role == "teacher":
                         if cur_batch:
                             smart_batches.append(cur_batch)
 
-                        for batch in smart_batches:
+                        for b_idx, batch in enumerate(smart_batches, 1):
+                            save_prog.progress(
+                                min(1.0, processed_cnt / max(1, total_rec)),
+                                text=f"Đang gửi lô {b_idx}/{len(smart_batches)} (đã xong {processed_cnt}/{total_rec} câu, thành công: {saved_ok})..."
+                            )
                             try:
-                                def _do_upsert(b=batch):
-                                    return supabase.table("question_bank").upsert(
-                                        b, on_conflict="question_hash", returning="minimal"
-                                    ).execute()
-                                run_with_retry(_do_upsert, retries=2, delay=0.8)
+                                run_with_retry(lambda b=batch: upsert_bank_batch_http1(b, timeout_sec=15), retries=2, delay=0.6)
                                 saved_ok += len(batch)
                                 processed_cnt += len(batch)
                                 save_prog.progress(
@@ -2438,23 +2461,19 @@ if st.session_state.role == "teacher":
                                     text=f"Đang nạp lên Supabase: {processed_cnt}/{total_rec} câu (Thành công: {saved_ok})..."
                                 )
                             except Exception:
-                                # Tách gửi từng câu và cập nhật thanh tiến trình sau MỖI câu để không bao giờ bị đứng hình
+                                # Nếu cả lô lỗi, tách gửi từng câu qua HTTP/1.1 độc lập và cập nhật tiến trình sau MỖI câu
                                 for single_rec in batch:
                                     try:
-                                        def _do_one(r=single_rec):
-                                            return supabase.table("question_bank").upsert(
-                                                [r], on_conflict="question_hash", returning="minimal"
-                                            ).execute()
-                                        run_with_retry(_do_one, retries=2, delay=0.6)
+                                        run_with_retry(lambda r=single_rec: upsert_bank_batch_http1([r], timeout_sec=15), retries=2, delay=0.5)
                                         saved_ok += 1
                                     except Exception as e_one:
                                         failed_records.append((single_rec.get("tag_id", "?"), str(e_one)))
                                     processed_cnt += 1
                                     save_prog.progress(
                                         min(1.0, processed_cnt / max(1, total_rec)),
-                                        text=f"Đang nạp lên Supabase: {processed_cnt}/{total_rec} câu (Thành công: {saved_ok})..."
+                                        text=f"Đang nạp từng câu: {processed_cnt}/{total_rec} câu (Thành công: {saved_ok})..."
                                     )
-                            time.sleep(0.1)
+                            time.sleep(0.08)
 
                         save_prog.empty()
                         fetch_all_bank_metadata.clear()
@@ -2720,34 +2739,56 @@ if st.session_state.role == "teacher":
                     st.divider()
 
         st.divider()
-        with st.expander("🚨 3. Xóa sạch Ngân hàng câu hỏi & Đánh số lại ID Kho từ #1"):
+        with st.expander("🚨 3. Xóa câu hỏi trong Ngân hàng theo Bài học / Khối / Toàn bộ"):
             st.warning(
-                "⚠️ **Cảnh báo quan trọng:** Hành động này sẽ xóa các câu hỏi trong bảng `question_bank` trên Supabase để giải phóng bộ nhớ và đặt lại bộ đếm ID Kho về lại từ `#1`. "
-                "Các đề thi đã xuất bản sẽ không bị ảnh hưởng."
+                "⚠️ Hành động này sẽ xóa các câu hỏi đã chọn trong bảng `question_bank` trên Supabase (các đề thi đã xuất bản không bị ảnh hưởng)."
             )
             del_scope = st.radio(
-                "Chọn phạm vi Ngân hàng muốn xóa:",
+                "Chọn phạm vi muốn xóa:",
                 [
-                    "🔥 Xóa toàn bộ Ngân hàng câu hỏi & Reset ID Kho về #1",
-                    "🧹 Chỉ xóa câu hỏi theo Khối lớp"
+                    "🎯 Xóa câu hỏi của Bài học cụ thể",
+                    "🧹 Xóa toàn bộ câu hỏi theo Khối lớp",
+                    "🔥 Xóa toàn bộ Ngân hàng câu hỏi & Reset ID Kho về #1"
                 ],
                 key="del_bank_scope"
             )
             wipe_grade = b_sel_g if b_sel_g != "-- Chọn Khối --" else "12"
-            if del_scope.startswith("🧹"):
-                wipe_grade = st.selectbox("Chọn Khối lớp cần xóa:", ["12", "11", "10", "9", "8", "7", "6"], index=["12", "11", "10", "9", "8", "7", "6"].index(wipe_grade), key="wipe_grade_sel")
-            confirm_chk = st.checkbox("Tôi đã hiểu và chắc chắn muốn xóa dữ liệu Ngân hàng câu hỏi đã chọn.", key="chk_wipe_bank")
-            confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` để mở khóa nút xóa:", key="txt_wipe_bank")
+            wipe_lessons = []
+            if del_scope.startswith("🎯"):
+                wl_c1, wl_c2, wl_c3 = st.columns([1, 2, 2.5])
+                wipe_grade = wl_c1.selectbox("Chọn Khối:", ["12", "11", "10", "9", "8", "7", "6"], index=["12", "11", "10", "9", "8", "7", "6"].index(wipe_grade), key="wipe_les_g")
+                w_chaps = KNTT_DATA[wipe_grade]["chapters"]
+                wipe_chap = wl_c2.selectbox("Chọn Chương:", list(w_chaps.keys()), format_func=lambda k: w_chaps[k], key=f"wipe_les_c_{wipe_grade}")
+                w_lessons_map = {bk: bv[1] for bk, bv in KNTT_DATA[wipe_grade]["lessons"].items() if bv[0] == wipe_chap}
+                wipe_lessons = wl_c3.multiselect("Chọn Bài học cần xóa sạch:", options=list(w_lessons_map.keys()), format_func=lambda k: w_lessons_map[k], key=f"wipe_les_b_{wipe_grade}_{wipe_chap}")
+                if wipe_lessons:
+                    cnt_in_les = sum(1 for r in all_meta if str(r.get("grade")) == wipe_grade and r.get("lesson_code") in wipe_lessons)
+                    st.info(f"📊 Hiện có **{cnt_in_les} câu hỏi** trong Ngân hàng thuộc {len(wipe_lessons)} bài học đang chọn.")
+                confirm_chk = st.checkbox("Tôi xác nhận muốn xóa toàn bộ câu hỏi của các bài học đã chọn ở trên.", key="chk_wipe_lesson")
+                can_wipe = confirm_chk and bool(wipe_lessons)
+            else:
+                if del_scope.startswith("🧹"):
+                    wipe_grade = st.selectbox("Chọn Khối lớp cần xóa:", ["12", "11", "10", "9", "8", "7", "6"], index=["12", "11", "10", "9", "8", "7", "6"].index(wipe_grade), key="wipe_grade_sel")
+                confirm_chk = st.checkbox("Tôi đã hiểu và chắc chắn muốn xóa dữ liệu Ngân hàng câu hỏi đã chọn.", key="chk_wipe_bank")
+                confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` để mở khóa nút xóa:", key="txt_wipe_bank")
+                can_wipe = confirm_chk and (confirm_txt.strip() == "XOA NGAN HANG")
 
-            can_wipe = confirm_chk and (confirm_txt.strip() == "XOA NGAN HANG")
-            if st.button("🗑️ TIẾN HÀNH XÓA & ĐÁNH SỐ LẠI ID KHO", type="primary", disabled=not can_wipe):
+            if st.button("🗑️ TIẾN HÀNH XÓA & ĐỒNG BỘ ID KHO", type="primary", disabled=not can_wipe):
                 try:
-                    if del_scope.startswith("🔥"):
+                    if del_scope.startswith("🎯"):
+                        supabase.table("question_bank").delete().eq("grade", wipe_grade).in_("lesson_code", wipe_lessons).execute()
+                        try:
+                            supabase.rpc("sync_question_bank_seq").execute()
+                        except Exception:
+                            pass
+                        clear_all_data_caches()
+                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi của bài {', '.join(wipe_lessons)} (Khối {wipe_grade})! Thầy có thể nạp lại từ đầu mà không lo trùng.")
+                    elif del_scope.startswith("🔥"):
                         try:
                             supabase.rpc("reset_question_bank_id").execute()
                         except Exception:
                             supabase.table("question_bank").delete().gt("id", 0).execute()
-                        fetch_all_bank_metadata.clear()
+                        clear_all_data_caches()
                         st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và đặt lại ID Kho bắt đầu từ #1!")
                     else:
                         supabase.table("question_bank").delete().eq("grade", wipe_grade).execute()
@@ -2755,7 +2796,7 @@ if st.session_state.role == "teacher":
                             supabase.rpc("sync_question_bank_seq").execute()
                         except Exception:
                             pass
-                        fetch_all_bank_metadata.clear()
+                        clear_all_data_caches()
                         st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {wipe_grade} và đồng bộ lại bộ đếm ID!")
                     st.rerun()
                 except Exception as e:
@@ -2886,63 +2927,122 @@ if st.session_state.role == "teacher":
                                         total_by_part[p_idx] += (val_n + val_h + val_v + val_c)
 
                         grand_total_qs = sum(total_by_part.values())
-                        st.info(
-                            f"📌 **Tổng số câu đã chọn trên Ma trận:** **{grand_total_qs} câu** — "
-                            f"Phần I: `{total_by_part[1]}` câu | Phần II: `{total_by_part[2]}` câu | "
-                            f"Phần III: `{total_by_part[3]}` câu | Phần IV (Tự luận): `{total_by_part[4]}` câu."
+                        mc_info, mc_num = st.columns([3.5, 1.5])
+                        mc_info.info(
+                            f"📌 **Tổng số câu cho 1 đề:** **{grand_total_qs} câu** — "
+                            f"Phần I: `{total_by_part[1]}` | Phần II: `{total_by_part[2]}` | "
+                            f"Phần III: `{total_by_part[3]}` | Phần IV: `{total_by_part[4]}`."
+                        )
+                        num_exams = mc_num.number_input(
+                            "📚 Số lượng đề khác nhau:",
+                            min_value=1, max_value=20, value=1, step=1,
+                            key="mat_num_exams"
                         )
 
-                        if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
-                            picked_ids = []
+                        # Kiểm tra đủ câu hỏi không trùng lặp cho tất cả num_exams đề
+                        shortage_msgs = []
+                        if grand_total_qs > 0 and num_exams > 1:
                             for p_idx in [1, 2, 3, 4]:
                                 for b_code in sel_lessons:
                                     for lvl in ["N", "H", "V", "C"]:
-                                        need_cnt = picked_per_lesson.get((b_code, p_idx, lvl), 0)
-                                        if need_cnt > 0:
-                                            pool = lesson_pools[b_code][p_idx][lvl]
-                                            chosen_items = random.sample(pool, need_cnt)
-                                            picked_ids.extend([it["id"] for it in chosen_items])
+                                        need_one = picked_per_lesson.get((b_code, p_idx, lvl), 0)
+                                        if need_one > 0:
+                                            avail_cnt = len(lesson_pools[b_code][p_idx][lvl])
+                                            if avail_cnt < need_one * num_exams:
+                                                shortage_msgs.append(
+                                                    f"- **{avail_lessons[b_code]}** — {PART_LABELS[p_idx]} — Mức `{lvl}`: cần `{need_one} × {num_exams} = {need_one * num_exams}` câu, nhưng kho hiện chỉ có `{avail_cnt}` câu."
+                                                )
+                        if shortage_msgs:
+                            st.error(
+                                f"⚠️ Không đủ câu hỏi không trùng nhau để tạo **{num_exams} đề khác nhau** ở các ô sau:\n\n"
+                                + "\n".join(shortage_msgs)
+                            )
 
-                            selected_qs = []
-                            if picked_ids:
-                                full_picked = supabase.table("question_bank").select("id, question_data, raw_tex").in_("id", picked_ids).execute().data
-                                id_to_row = {r["id"]: r for r in full_picked}
-                                for pid in picked_ids:
-                                    item = id_to_row.get(pid)
-                                    if item and item.get("question_data"):
-                                        q_copy = sanitize_question_obj(item["question_data"].copy())
-                                        if item.get("raw_tex") and not q_copy.get("raw_tex"):
-                                            q_copy["raw_tex"] = item["raw_tex"]
-                                        q_copy["id"] = f"q_{len(selected_qs) + 1}"
-                                        selected_qs.append(q_copy)
-
-                            if not selected_qs:
+                        btn_mat_lbl = (
+                            "🎲 Bốc câu hỏi tạo Bản nháp Đề thi"
+                            if num_exams == 1
+                            else f"🎲 Bốc câu hỏi tạo {num_exams} Bản nháp Đề thi khác nhau"
+                        )
+                        if st.button(btn_mat_lbl, type="primary", disabled=bool(shortage_msgs)):
+                            if grand_total_qs == 0:
                                 st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận các bài học phía trên!")
                             else:
-                                st.session_state["draft_matrix_qs"] = selected_qs
+                                per_exam_ids = [[] for _ in range(num_exams)]
+                                all_picked_ids = []
+                                for p_idx in [1, 2, 3, 4]:
+                                    for b_code in sel_lessons:
+                                        for lvl in ["N", "H", "V", "C"]:
+                                            need_cnt = picked_per_lesson.get((b_code, p_idx, lvl), 0)
+                                            if need_cnt > 0:
+                                                pool = lesson_pools[b_code][p_idx][lvl]
+                                                total_need = need_cnt * num_exams
+                                                chosen_items = random.sample(pool, total_need)
+                                                for ex_i in range(num_exams):
+                                                    slice_ids = [it["id"] for it in chosen_items[ex_i * need_cnt:(ex_i + 1) * need_cnt]]
+                                                    per_exam_ids[ex_i].extend(slice_ids)
+                                                    all_picked_ids.extend(slice_ids)
+
+                                id_to_row = {}
+                                for chunk_i in range(0, len(all_picked_ids), 40):
+                                    chunk_ids = all_picked_ids[chunk_i:chunk_i + 40]
+                                    rows_chunk = supabase.table("question_bank").select("id, question_data, raw_tex").in_("id", chunk_ids).execute().data
+                                    for r in rows_chunk:
+                                        id_to_row[r["id"]] = r
+
+                                draft_exams_list = []
+                                for ex_i in range(num_exams):
+                                    ex_qs_built = []
+                                    for pid in per_exam_ids[ex_i]:
+                                        item = id_to_row.get(pid)
+                                        if item and item.get("question_data"):
+                                            q_copy = sanitize_question_obj(item["question_data"].copy())
+                                            if item.get("raw_tex") and not q_copy.get("raw_tex"):
+                                                q_copy["raw_tex"] = item["raw_tex"]
+                                            q_copy["id"] = f"q_{len(ex_qs_built) + 1}"
+                                            ex_qs_built.append(q_copy)
+                                    draft_exams_list.append(ex_qs_built)
+
+                                st.session_state["draft_matrix_exams"] = draft_exams_list
                                 st.session_state["draft_matrix_grade"] = sel_g
                                 st.session_state["draft_matrix_chap"] = (
                                     avail_chaps[sel_chaps[0]] if len(sel_chaps) == 1 else "Ôn thi giữa học kì 1"
                                 )
                                 st.rerun()
 
-                        if st.session_state.get("draft_matrix_qs"):
-                            draft_qs = st.session_state["draft_matrix_qs"]
+                        if st.session_state.get("draft_matrix_exams"):
+                            draft_exams = st.session_state["draft_matrix_exams"]
+                            n_drafts = len(draft_exams)
                             st.markdown("---")
-                            st.subheader(f"🧐 Xem kỹ Bản nháp Đề thi ({len(draft_qs)} câu), Tải file LaTeX (.tex) & Đổi câu hỏi")
+                            st.subheader(
+                                f"🧐 Xem Bản nháp {n_drafts} Đề thi khác nhau & Tải file LaTeX"
+                                if n_drafts > 1
+                                else f"🧐 Xem Bản nháp Đề thi ({len(draft_exams[0])} câu) & Tải file LaTeX"
+                            )
+
+                            cur_ex_idx = 0
+                            if n_drafts > 1:
+                                cur_ex_idx = st.radio(
+                                    "Chọn bản nháp đề muốn xem / đổi câu:",
+                                    list(range(n_drafts)),
+                                    format_func=lambda idx_e: f"📝 Đề số {idx_e + 1:02d} ({len(draft_exams[idx_e])} câu)",
+                                    horizontal=True,
+                                    key="draft_mat_view_idx"
+                                )
+                            draft_qs = draft_exams[cur_ex_idx]
+                            all_used_across_drafts = [q_x for ex_x in draft_exams for q_x in ex_x]
 
                             dr_dl1, dr_dl2 = st.columns(2)
                             dr_dl1.download_button(
-                                "📄 Tải mã LaTeX đề nháp dạng khối",
-                                build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=False).encode("utf-8"),
-                                "de_nhap_ex_blocks.tex",
+                                f"📄 Tải mã LaTeX Đề số {cur_ex_idx + 1:02d} dạng khối",
+                                build_latex_export_content(draft_qs, title=f"ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN - ĐỀ SỐ {cur_ex_idx + 1:02d}", full_document=False).encode("utf-8"),
+                                f"de_nhap_{cur_ex_idx + 1:02d}_ex_blocks.tex",
                                 "text/plain",
                                 use_container_width=True
                             )
                             dr_dl2.download_button(
-                                "📘 Tải file LaTeX hoàn chỉnh của đề nháp",
-                                build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=True).encode("utf-8"),
-                                "de_nhap_full_doc.tex",
+                                f"📘 Tải file LaTeX hoàn chỉnh Đề số {cur_ex_idx + 1:02d}",
+                                build_latex_export_content(draft_qs, title=f"ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN - ĐỀ SỐ {cur_ex_idx + 1:02d}", full_document=True).encode("utf-8"),
+                                f"de_nhap_{cur_ex_idx + 1:02d}_full_doc.tex",
                                 "text/plain",
                                 use_container_width=True
                             )
@@ -2952,24 +3052,26 @@ if st.session_state.role == "teacher":
                                 with col_dcard:
                                     render_question_card(dq, f"Câu {d_idx + 1}")
                                 with col_dbtn:
-                                    if st.button("🔄 Đổi câu khác", key=f"swap_draft_{d_idx}", use_container_width=True):
-                                        new_q = find_replacement_question(dq, draft_qs)
+                                    if st.button("🔄 Đổi câu khác", key=f"swap_draft_{cur_ex_idx}_{d_idx}", use_container_width=True):
+                                        new_q = find_replacement_question(dq, all_used_across_drafts)
                                         if new_q:
                                             draft_qs[d_idx] = new_q
-                                            st.session_state["draft_matrix_qs"] = draft_qs
-                                            st.toast(f"✅ Đã đổi Câu {d_idx + 1} sang một câu hỏi mới!")
+                                            draft_exams[cur_ex_idx] = draft_qs
+                                            st.session_state["draft_matrix_exams"] = draft_exams
+                                            st.toast(f"✅ Đã đổi Câu {d_idx + 1} của Đề số {cur_ex_idx + 1:02d} sang một câu mới không trùng!")
                                             st.rerun()
                                         else:
-                                            st.warning("Kho không còn câu hỏi dự phòng nào khác cùng Bài/Mức độ này!")
-                                    if st.button("🗑️ Xóa câu này", key=f"rm_draft_{d_idx}", use_container_width=True):
+                                            st.warning("Kho không còn câu hỏi dự phòng nào khác chưa dùng trong các đề này!")
+                                    if st.button("🗑️ Xóa câu này", key=f"rm_draft_{cur_ex_idx}_{d_idx}", use_container_width=True):
                                         draft_qs.pop(d_idx)
                                         for idx_re, q_re in enumerate(draft_qs):
                                             q_re["id"] = f"q_{idx_re + 1}"
-                                        st.session_state["draft_matrix_qs"] = draft_qs
+                                        draft_exams[cur_ex_idx] = draft_qs
+                                        st.session_state["draft_matrix_exams"] = draft_exams
                                         st.rerun()
                                 st.divider()
 
-                            st.markdown("#### ⚙️ Thiết lập thông tin & Xuất bản chính thức Đề thi này:")
+                            st.markdown(f"#### ⚙️ Thiết lập thông tin & Xuất bản chính thức {n_drafts} Đề thi:")
                             topic_opts_mat = get_topic_options_for_grade(st.session_state.get("draft_matrix_grade", sel_g))
                             default_topic_mat = st.session_state.get("draft_matrix_chap", topic_opts_mat[0])
                             def_t_idx = topic_opts_mat.index(default_topic_mat) if default_topic_mat in topic_opts_mat else 0
@@ -2981,7 +3083,7 @@ if st.session_state.role == "teacher":
                             else:
                                 mat_chap_final = mat_chap_choice
 
-                            mat_title = mt1.text_input("Tên đề thi mới", placeholder="VD: Đề ôn thi giữa học kì 1 - Đề số 01", key="pub_mat_title")
+                            mat_title = mt1.text_input("Tên đề thi chung", placeholder="VD: Đề kiểm tra giữa học kì 1", key="pub_mat_title")
                             mat_dur = mt2.number_input("Thời gian (phút)", 5, 180, 45, key="pub_mat_dur")
 
                             ms1, ms2, ms3, ms4 = st.columns(4)
@@ -2990,23 +3092,30 @@ if st.session_state.role == "teacher":
                             m_pt3 = ms3.number_input("Điểm mỗi câu Phần III", 0.0, 10.0, 0.5, 0.1, key="m_pt3")
                             m_pt4 = ms4.number_input("Điểm mỗi câu Tự luận (Phần IV)", 0.0, 10.0, 1.0, 0.25, key="m_pt4")
 
-                            if st.button("🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY", type="primary"):
+                            pub_btn_lbl = (
+                                "🚀 XUẤT BẢN CHÍNH THỨC ĐỀ THI NÀY"
+                                if n_drafts == 1
+                                else f"🚀 XUẤT BẢN CHÍNH THỨC CẢ {n_drafts} ĐỀ THI NÀY"
+                            )
+                            if st.button(pub_btn_lbl, type="primary"):
                                 if not mat_title:
-                                    st.warning("Vui lòng nhập Tên đề thi mới!")
+                                    st.warning("Vui lòng nhập Tên đề thi!")
                                 else:
-                                    supabase.table("exams").insert({
-                                        "title": mat_title.strip(),
-                                        "grade": st.session_state.get("draft_matrix_grade", sel_g),
-                                        "chapter": mat_chap_final.strip(),
-                                        "duration": mat_dur,
-                                        "questions": draft_qs,
-                                        "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
-                                        "show_solutions": False,
-                                        "is_active": True
-                                    }).execute()
-                                    del st.session_state["draft_matrix_qs"]
+                                    for ex_i, ex_qs_pub in enumerate(draft_exams):
+                                        final_t = mat_title.strip() if n_drafts == 1 else f"{mat_title.strip()} - Đề số {ex_i + 1:02d}"
+                                        supabase.table("exams").insert({
+                                            "title": final_t,
+                                            "grade": st.session_state.get("draft_matrix_grade", sel_g),
+                                            "chapter": mat_chap_final.strip(),
+                                            "duration": mat_dur,
+                                            "questions": ex_qs_pub,
+                                            "scoring_config": {"p1": m_pt1, "p2": m_pt2, "p3": m_pt3, "p4": m_pt4},
+                                            "show_solutions": False,
+                                            "is_active": True
+                                        }).execute()
+                                    del st.session_state["draft_matrix_exams"]
                                     clear_all_data_caches()
-                                    st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công! Bạn có thể xem ở tab **Quản lý đề**.")
+                                    st.success(f"🎉 Đã xuất bản thành công **{n_drafts} đề thi** khác nhau! Thầy có thể xem ở mục **Quản lý đề**.")
                                     st.rerun()
 
         elif create_mode == "📄 Nạp đề từ file":
