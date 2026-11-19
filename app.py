@@ -450,7 +450,7 @@ def init_db():
             mod = importlib.import_module(mod_path)
             ClientOptions = getattr(mod, "ClientOptions", None)
             if ClientOptions is not None:
-                return create_client(url, key, options=ClientOptions(postgrest_client_timeout=60))
+                return create_client(url, key, options=ClientOptions(postgrest_client_timeout=18))
         except Exception:
             pass
     return create_client(url, key)
@@ -2401,37 +2401,60 @@ if st.session_state.role == "teacher":
 
                         db_records = list(unique_records_map.values())
                         dup_removed = len(candidate_save_qs) - len(db_records)
+                        import json as _json
                         save_prog = st.progress(0.0, text=f"Đang nạp 0/{len(db_records)} câu hỏi lên Supabase...")
                         saved_ok = 0
+                        processed_cnt = 0
                         failed_records = []
-                        batch_sz = 12
                         total_rec = len(db_records)
 
-                        for i in range(0, total_rec, batch_sz):
-                            batch = db_records[i:i + batch_sz]
+                        # Chia lô thông minh theo DUNG LƯỢNG thực tế (tối đa 5 câu và không quá 250 KB mỗi lượt gửi)
+                        # để không bao giờ vượt ngưỡng statement_timeout 8 giây của Supabase Free khi gặp hình TikZ SVG nặng
+                        smart_batches = []
+                        cur_batch = []
+                        cur_bytes = 0
+                        for rec in db_records:
+                            rec_bytes = len(_json.dumps(rec, ensure_ascii=False).encode("utf-8"))
+                            if cur_batch and (len(cur_batch) >= 5 or cur_bytes + rec_bytes > 250_000):
+                                smart_batches.append(cur_batch)
+                                cur_batch = []
+                                cur_bytes = 0
+                            cur_batch.append(rec)
+                            cur_bytes += rec_bytes
+                        if cur_batch:
+                            smart_batches.append(cur_batch)
+
+                        for batch in smart_batches:
                             try:
                                 def _do_upsert(b=batch):
                                     return supabase.table("question_bank").upsert(
                                         b, on_conflict="question_hash", returning="minimal"
                                     ).execute()
-                                run_with_retry(_do_upsert, retries=3, delay=1.5)
+                                run_with_retry(_do_upsert, retries=2, delay=0.8)
                                 saved_ok += len(batch)
+                                processed_cnt += len(batch)
+                                save_prog.progress(
+                                    min(1.0, processed_cnt / max(1, total_rec)),
+                                    text=f"Đang nạp lên Supabase: {processed_cnt}/{total_rec} câu (Thành công: {saved_ok})..."
+                                )
                             except Exception:
-                                # Nếu cả lô gặp timeout/lỗi mạng, tách ra nạp từng câu để không bao giờ bị đứt giữa chừng
+                                # Tách gửi từng câu và cập nhật thanh tiến trình sau MỖI câu để không bao giờ bị đứng hình
                                 for single_rec in batch:
                                     try:
                                         def _do_one(r=single_rec):
                                             return supabase.table("question_bank").upsert(
                                                 [r], on_conflict="question_hash", returning="minimal"
                                             ).execute()
-                                        run_with_retry(_do_one, retries=3, delay=1.2)
+                                        run_with_retry(_do_one, retries=2, delay=0.6)
                                         saved_ok += 1
                                     except Exception as e_one:
                                         failed_records.append((single_rec.get("tag_id", "?"), str(e_one)))
-                            save_prog.progress(
-                                min(1.0, (i + len(batch)) / max(1, total_rec)),
-                                text=f"Đang nạp lên Supabase: {min(i + len(batch), total_rec)}/{total_rec} câu (Thành công: {saved_ok})..."
-                            )
+                                    processed_cnt += 1
+                                    save_prog.progress(
+                                        min(1.0, processed_cnt / max(1, total_rec)),
+                                        text=f"Đang nạp lên Supabase: {processed_cnt}/{total_rec} câu (Thành công: {saved_ok})..."
+                                    )
+                            time.sleep(0.1)
 
                         save_prog.empty()
                         fetch_all_bank_metadata.clear()
