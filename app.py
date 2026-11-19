@@ -534,6 +534,25 @@ def make_teacher_auth_token():
     secret_str = st.secrets.get("ADMIN_PASSWORD", "123456") + "_LMC_TEACHER"
     return hashlib.sha256(secret_str.encode("utf-8")).hexdigest()[:16]
 
+def make_student_auth_token(username):
+    secret_str = f"{str(username).strip()}_{st.secrets.get('ADMIN_PASSWORD', '123456')}_LMC_STUDENT"
+    return hashlib.sha256(secret_str.encode("utf-8")).hexdigest()[:16]
+
+def get_attempt_history_info(sub_obj):
+    """Trích xuất số lần thi hiện tại và tóm tắt lịch sử các lần thi trước (lưu trong answers['_attempt_history'])"""
+    ans = sub_obj.get("answers") or {}
+    hist = ans.get("_attempt_history") or []
+    cur_attempt = len(hist) + 1
+    if not hist:
+        return cur_attempt, "Chưa có", []
+    parts = []
+    for h in hist:
+        att_no = h.get("attempt", 1)
+        sc = h.get("score", 0.0)
+        dur = h.get("duration", "-")
+        parts.append(f"Lần {att_no}: {sc}đ ({dur})")
+    return cur_attempt, " | ".join(parts), hist
+
 @st.dialog("⚠️ Xác nhận xóa đề thi")
 def confirm_delete_exam_dialog(exam_id, exam_title):
     st.warning(f"**Bạn chắc chắn muốn xóa đề này?**\n\nĐề thi: **#{exam_id} - {exam_title}**")
@@ -1243,6 +1262,7 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
     headers = [
         "STT", "Tài khoản", "Họ và tên", "Lớp", "Trạng thái",
         "Điểm tổng", "Điểm Phần I", "Điểm Phần II", "Điểm Phần III",
+        "Lần thi", "Lịch sử các lần trước",
         "Bắt đầu lúc", "Nộp bài lúc", "Thời gian làm bài",
         "Số lần rời màn hình", "Số ảnh Camera"
     ] + [f"Ảnh Camera #{i+1}" for i in range(max_snaps)]
@@ -1264,7 +1284,7 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws_scores.row_dimensions[1].height = 28
 
-    col_widths = [6, 15, 24, 10, 13, 12, 12, 12, 12, 20, 20, 18, 16, 14] + [18] * max_snaps
+    col_widths = [6, 15, 24, 10, 13, 12, 12, 12, 12, 10, 28, 20, 20, 18, 16, 14] + [18] * max_snaps
     for idx_w, w in enumerate(col_widths, start=1):
         ws_scores.column_dimensions[get_column_letter(idx_w)].width = w
 
@@ -1276,14 +1296,18 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
         dur_str, st_time_str, sub_time_str = format_duration_vn(s.get("started_at"), s.get("submitted_at"))
         snaps = s.get("snapshots") or []
 
+        cur_att_xl, hist_str_xl, _ = get_attempt_history_info(s)
+        st_lbl_xl = "Đã nộp" if s.get("status") == "submitted" else ("Chờ thi lại" if s.get("status") == "awaiting_retake" else "Đang làm")
         row_vals = [
             row_num - 1,
             s.get("username", ""),
             stu_info.get("full_name", ""),
             stu_info.get("class_name", ""),
-            "Đã nộp" if s.get("status") == "submitted" else "Đang làm",
+            st_lbl_xl,
             s.get("score", 0.0),
             s1, s2, s3,
+            f"Lần {cur_att_xl}",
+            hist_str_xl,
             st_time_str,
             sub_time_str,
             dur_str,
@@ -1312,7 +1336,7 @@ def build_exam_report_xlsx(selected_exam, subs, item_stats):
                     pil_img.save(img_byte_arr, format="PNG")
                     img_byte_arr.seek(0)
                     xl_img = XLImage(img_byte_arr)
-                    col_letter = get_column_letter(15 + snap_idx)
+                    col_letter = get_column_letter(17 + snap_idx)
                     ws_scores.add_image(xl_img, f"{col_letter}{row_num}")
                 except Exception:
                     pass
@@ -1680,16 +1704,108 @@ def render_proctor_bar(end_timestamp_ms, supabase_url, supabase_key, submission_
     const video = document.getElementById("webcam");
     const canvas = document.getElementById("canvas");
     const camStatus = document.getElementById("cam_status");
+    let captureTimer = null;
 
-    navigator.mediaDevices.getUserMedia({{ video: true, audio: false }})
-        .then(stream => {{
-            video.srcObject = stream;
-            setInterval(checkAndCapture, 5000);
-        }})
-        .catch(err => {{
-            camStatus.innerText = "❌ Không tìm thấy Camera hoặc bị từ chối quyền!";
+    function removeCamLockOverlay() {{
+        try {{
+            const parentDoc = window.parent.document;
+            const ov = parentDoc.getElementById("proctor-cam-lock-overlay");
+            if (ov) ov.remove();
+        }} catch (e) {{}}
+    }}
+
+    function showCamLockOverlay(msgText, isError) {{
+        try {{
+            const parentDoc = window.parent.document;
+            let ov = parentDoc.getElementById("proctor-cam-lock-overlay");
+            if (!ov) {{
+                ov = parentDoc.createElement("div");
+                ov.id = "proctor-cam-lock-overlay";
+                ov.style.cssText = "position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(15,23,42,0.92); z-index:999999; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; backdrop-filter:blur(6px);";
+                ov.innerHTML = `
+                    <div style="background:#ffffff; color:#0f172a; max-width:520px; width:100%; border-radius:18px; padding:28px 24px; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.35); font-family:'Be Vietnam Pro',sans-serif;">
+                        <div style="font-size:48px; margin-bottom:8px;">📷</div>
+                        <h2 style="margin:0 0 10px 0; color:#b91c1c; font-size:21px;">BẮT BUỘC BẬT CAMERA ĐỂ LÀM BÀI</h2>
+                        <p id="proctor-cam-lock-msg" style="font-size:15.5px; color:#334155; line-height:1.6; margin:0 0 16px 0;"></p>
+                        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:10px; padding:12px 14px; text-align:left; font-size:13.5px; color:#334155; margin-bottom:18px; line-height:1.6;">
+                            <b>Hướng dẫn bật nhanh:</b><br>
+                            • <b>Trên iPhone (Safari):</b> Bấm biểu tượng <b>AA</b> hoặc ổ khóa trên thanh địa chỉ → Cài đặt trang web → <b>Camera: Cho phép</b> → bấm nút kiểm tra bên dưới.<br>
+                            • <b>Trên Laptop (Chrome/Edge):</b> Bấm biểu tượng ổ khóa bên trái thanh địa chỉ web → Bật <b>Máy ảnh (Camera)</b> → bấm nút kiểm tra bên dưới.
+                        </div>
+                        <button id="proctor-retry-cam-btn" style="background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#ffffff; border:none; border-radius:10px; padding:12px 24px; font-size:16px; font-weight:700; cursor:pointer; width:100%; box-shadow:0 4px 12px rgba(37,99,235,0.3);">
+                            🔄 Bật / Kiểm tra lại Camera
+                        </button>
+                    </div>
+                `;
+                parentDoc.body.appendChild(ov);
+                const btn = parentDoc.getElementById("proctor-retry-cam-btn");
+                if (btn) {{
+                    btn.onclick = () => {{ startCamera(); }};
+                }}
+            }}
+            const msgEl = parentDoc.getElementById("proctor-cam-lock-msg");
+            if (msgEl) {{
+                msgEl.innerText = msgText;
+                msgEl.style.color = isError ? "#b91c1c" : "#1e3a8a";
+            }}
+        }} catch (e) {{}}
+    }}
+
+    function isCameraLive() {{
+        if (!video.srcObject) return false;
+        const tracks = video.srcObject.getVideoTracks ? video.srcObject.getVideoTracks() : [];
+        return tracks.length > 0 && tracks[0].readyState === "live" && tracks[0].enabled;
+    }}
+
+    function startCamera() {{
+        camStatus.innerText = "🟡 Đang yêu cầu quyền bật Camera...";
+        camStatus.style.color = "#fde047";
+        showCamLockOverlay("Hệ thống đang yêu cầu quyền bật Camera giám sát. Vui lòng nhấn 'Cho phép' (Allow) trên trình duyệt để mở khóa đề thi.", false);
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+            camStatus.innerText = "❌ Trình duyệt không hỗ trợ Camera!";
             camStatus.style.color = "#ef4444";
-        }});
+            showCamLockOverlay("Trình duyệt hiện tại không hỗ trợ Camera hoặc đang mở trong ứng dụng hạn chế (như Zalo/Messenger). Hãy mở đường link bằng Safari hoặc Chrome rồi bật Camera.", true);
+            return;
+        }}
+
+        navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: "user" }}, audio: false }})
+            .then(stream => {{
+                video.srcObject = stream;
+                camStatus.innerText = "🟢 Camera giám sát trực tuyến đang hoạt động";
+                camStatus.style.color = "#86efac";
+                removeCamLockOverlay();
+
+                const tracks = stream.getVideoTracks();
+                if (tracks.length > 0) {{
+                    tracks[0].onended = () => {{
+                        camStatus.innerText = "❌ Camera đã bị tắt! Vui lòng bật lại.";
+                        camStatus.style.color = "#ef4444";
+                        showCamLockOverlay("Camera của bạn vừa bị tắt hoặc mất kết nối. Vui lòng bật lại Camera để tiếp tục làm bài!", true);
+                    }};
+                }}
+                if (!captureTimer) {{
+                    captureTimer = setInterval(checkAndCapture, 5000);
+                }}
+            }})
+            .catch(err => {{
+                camStatus.innerText = "❌ Chưa bật Camera hoặc bị từ chối quyền!";
+                camStatus.style.color = "#ef4444";
+                showCamLockOverlay("Bạn chưa cấp quyền Camera hoặc thiết bị chưa bật Camera. Vui lòng cho phép truy cập Camera rồi bấm nút bên dưới để mở khóa đề thi.", true);
+            }});
+    }}
+
+    startCamera();
+    setInterval(() => {{
+        if (!isCameraLive()) {{
+            showCamLockOverlay("Camera chưa hoạt động. Vui lòng bật quyền Camera rồi bấm 'Bật / Kiểm tra lại Camera' để mở khóa bài thi.", true);
+        }} else {{
+            removeCamLockOverlay();
+        }}
+    }}, 2500);
+
+    window.addEventListener("beforeunload", removeCamLockOverlay);
+    window.addEventListener("pagehide", removeCamLockOverlay);
 
     function checkAndCapture() {{
         if (!video.srcObject || video.readyState < 2) return;
@@ -1835,11 +1951,21 @@ if "role" not in st.session_state:
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Tự động khôi phục quyền Giáo viên nếu bấm F5 làm mới trình duyệt
+# Tự động khôi phục phiên đăng nhập Giáo viên hoặc Học sinh nếu lỡ bấm F5 / vuốt tải lại trang trên iPhone
 if st.session_state.role is None:
     qp_auth = st.query_params.get("auth", "")
+    qp_stu = st.query_params.get("stu", "")
+    qp_stutok = st.query_params.get("stutok", "")
     if qp_auth == make_teacher_auth_token():
         st.session_state.role = "teacher"
+    elif qp_stu and qp_stutok == make_student_auth_token(qp_stu):
+        try:
+            stu_restore = supabase.table("students").select("*").eq("username", qp_stu).limit(1).execute().data
+            if stu_restore:
+                st.session_state.role = "student"
+                st.session_state.user = stu_restore[0]
+        except Exception:
+            pass
 
 if st.session_state.role is None:
     tab_hs, tab_gv = st.tabs(["👨‍🎓 Học sinh", "👨‍🏫 Giáo viên"])
@@ -1854,6 +1980,8 @@ if st.session_state.role is None:
                 if res.data:
                     st.session_state.role = "student"
                     st.session_state.user = res.data[0]
+                    st.query_params["stu"] = res.data[0]["username"]
+                    st.query_params["stutok"] = make_student_auth_token(res.data[0]["username"])
                     st.rerun()
                 else:
                     st.error("Sai tài khoản hoặc mật khẩu!")
@@ -1887,8 +2015,9 @@ with st.sidebar:
     if st.button("🚪 Đăng xuất", use_container_width=True):
         st.session_state.role = None
         st.session_state.user = None
-        if "auth" in st.query_params:
-            del st.query_params["auth"]
+        for _qk in ("auth", "stu", "stutok"):
+            if _qk in st.query_params:
+                del st.query_params[_qk]
         st.rerun()
 
 # =====================================================================
@@ -3358,12 +3487,16 @@ if st.session_state.role == "teacher":
                         for s in subs:
                             stu_info = s.get("students") or {}
                             dur_str, st_time_str, sub_time_str = format_duration_vn(s.get("started_at"), s.get("submitted_at"))
+                            cur_att, hist_summary, _ = get_attempt_history_info(s)
+                            st_lbl = "Đã nộp" if s["status"] == "submitted" else ("Chờ thi lại" if s["status"] == "awaiting_retake" else "Đang làm")
                             rows.append({
                                 "Tài khoản": s["username"],
                                 "Họ tên": stu_info.get("full_name", ""),
                                 "Lớp": stu_info.get("class_name", ""),
-                                "Trạng thái": "Đã nộp" if s["status"] == "submitted" else "Đang làm",
-                                "Điểm số": s["score"],
+                                "Lần thi": f"Lần {cur_att}",
+                                "Trạng thái": st_lbl,
+                                "Điểm hiện tại": s["score"],
+                                "Lịch sử các lần trước": hist_summary,
                                 "Bắt đầu lúc": st_time_str,
                                 "Nộp bài lúc": sub_time_str,
                                 "Thời gian làm bài": dur_str,
@@ -3400,28 +3533,75 @@ if st.session_state.role == "teacher":
                             format_func=lambda x: f"{x['username']} - {(x.get('students') or {}).get('full_name', '')} (Lớp {(x.get('students') or {}).get('class_name', '')} | Rời màn hình: {x['tab_switches']} lần)"
                         )
                         if chosen_sub:
+                            cur_att_s, hist_sum_s, hist_list_s = get_attempt_history_info(chosen_sub)
                             dur_s, st_s, sub_s = format_duration_vn(chosen_sub.get("started_at"), chosen_sub.get("submitted_at"))
-                            st.write(f"⏱️ **Bắt đầu:** `{st_s}` | **Nộp bài:** `{sub_s}` | **Thời gian làm bài:** `{dur_s}`")
+                            st.write(f"📌 **Lần thi hiện tại:** `Lần {cur_att_s}` | ⏱️ **Bắt đầu:** `{st_s}` | **Nộp bài:** `{sub_s}` | **Thời gian làm bài:** `{dur_s}`")
+                            if hist_list_s:
+                                st.info(f"📜 **Lịch sử các lần thi trước đã lưu:** {hist_sum_s}")
 
-                            new_total_score = st.number_input("Cập nhật tổng điểm (nếu cộng thêm điểm Tự luận trên giấy):", 0.0, 20.0, float(chosen_sub.get("score") or 0.0), 0.25)
-                            if st.button("💾 Lưu tổng điểm mới"):
+                            new_total_score = st.number_input("Cập nhật tổng điểm lần hiện tại:", 0.0, 20.0, float(chosen_sub.get("score") or 0.0), 0.25, key=f"upd_sc_{chosen_sub['id']}")
+                            act_s1, act_s2, act_s3 = st.columns(3)
+                            if act_s1.button("💾 Lưu tổng điểm mới", use_container_width=True):
                                 supabase.table("submissions").update({"score": new_total_score}).eq("id", chosen_sub["id"]).execute()
                                 st.success("Đã cập nhật điểm số!")
                                 st.rerun()
 
-                            if st.button("🔄 Xóa lượt làm bài này"):
-                                supabase.table("submissions").delete().eq("id", chosen_sub["id"]).execute()
-                                st.success("Đã xóa lượt làm bài! Học sinh có thể vào thi lại.")
+                            if act_s2.button(f"🔁 Cho phép làm lại Lần {cur_att_s + 1} (Giữ kết quả Lần {cur_att_s})", type="primary", use_container_width=True):
+                                cur_ans_copy = dict(chosen_sub.get("answers") or {})
+                                prev_hist = list(cur_ans_copy.pop("_attempt_history", []))
+                                prev_record = {
+                                    "attempt": cur_att_s,
+                                    "score": chosen_sub.get("score", 0.0),
+                                    "started_at": chosen_sub.get("started_at"),
+                                    "submitted_at": chosen_sub.get("submitted_at"),
+                                    "duration": dur_s,
+                                    "tab_switches": chosen_sub.get("tab_switches", 0),
+                                    "seed": chosen_sub.get("seed"),
+                                    "answers": cur_ans_copy,
+                                    "snapshots": chosen_sub.get("snapshots") or []
+                                }
+                                prev_hist.append(prev_record)
+                                supabase.table("submissions").update({
+                                    "status": "awaiting_retake",
+                                    "score": 0.0,
+                                    "tab_switches": 0,
+                                    "snapshots": [],
+                                    "submitted_at": None,
+                                    "answers": {"_attempt_history": prev_hist}
+                                }).eq("id", chosen_sub["id"]).execute()
+                                st.success(f"✅ Đã lưu giữ kết quả Lần {cur_att_s} và mở quyền cho học sinh làm lại Lần {cur_att_s + 1}!")
                                 st.rerun()
 
+                            if act_s3.button("🗑️ Xóa hẳn toàn bộ bài làm", use_container_width=True):
+                                supabase.table("submissions").delete().eq("id", chosen_sub["id"]).execute()
+                                st.success("Đã xóa toàn bộ lượt làm bài của học sinh này!")
+                                st.rerun()
+
+                            st.markdown(f"##### 📷 Ảnh chụp Camera — Lần {cur_att_s} (hiện tại):")
                             snaps = chosen_sub.get("snapshots") or []
                             if not snaps:
-                                st.info("Học sinh này chưa có ảnh chụp camera nào.")
+                                st.info("Chưa có ảnh chụp camera cho lần thi hiện tại.")
                             else:
                                 cols = st.columns(4)
                                 for i, snap in enumerate(snaps):
                                     with cols[i % 4]:
                                         st.image(snap["img"], caption=f"Lúc: {snap['time']}")
+
+                            if hist_list_s:
+                                for h_item in reversed(hist_list_s):
+                                    h_att = h_item.get("attempt", 1)
+                                    h_sc = h_item.get("score", 0.0)
+                                    h_dur = h_item.get("duration", "-")
+                                    h_tab = h_item.get("tab_switches", 0)
+                                    h_snaps = h_item.get("snapshots") or []
+                                    with st.expander(f"📜 Chi tiết & Ảnh Camera Lần {h_att} — Điểm: {h_sc}đ | Thời gian: {h_dur} | Rời màn hình: {h_tab} lần ({len(h_snaps)} ảnh)"):
+                                        if not h_snaps:
+                                            st.caption("Không có ảnh camera ở lần thi này.")
+                                        else:
+                                            h_cols = st.columns(4)
+                                            for hi, h_snap in enumerate(h_snaps):
+                                                with h_cols[hi % 4]:
+                                                    st.image(h_snap["img"], caption=f"Lúc: {h_snap['time']}")
 
     # -----------------------------------------------------------------
     # PHÂN KHU 4: QUẢN LÝ HỌC SINH (CHỈ CHẠY KHI GIÁO VIÊN CHỌN MỞ)
@@ -3623,6 +3803,36 @@ elif st.session_state.role == "student":
         st.stop()
 
     submission = sub_res[0]
+    cur_stu_att, stu_hist_summary, stu_hist_list = get_attempt_history_info(submission)
+
+    if submission.get("status") == "awaiting_retake":
+        sc_cfg = exam.get("scoring_config") or {"p1": 0.25, "p2": 1.0, "p3": 0.5, "p4": 1.0}
+        st.markdown(f"""
+        <div class="question-card">
+            <h3>🔁 Làm lại bài kiểm tra (Lần {cur_stu_att}): <span style="color:#2563eb;">{exam['title']}</span></h3>
+            <ul>
+                <li><b>Kết quả các lần trước (được lưu giữ):</b> {stu_hist_summary}</li>
+                <li><b>Thời gian làm bài:</b> <b>{exam['duration']} phút</b> (tính lại từ đầu khi bạn bấm bắt đầu).</li>
+                <li><b>Quy định phòng thi:</b> Bắt buộc bật quyền Camera để mở khóa đề thi và giữ toàn màn hình làm bài.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button(f"🚀 BẮT ĐẦU LÀM LẠI (LẦN {cur_stu_att})", type="primary"):
+            new_seed = random.randint(10000, 99999)
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            supabase.table("submissions").update({
+                "status": "in_progress",
+                "seed": new_seed,
+                "started_at": now_iso,
+                "submitted_at": None,
+                "score": 0.0,
+                "tab_switches": 0,
+                "snapshots": [],
+                "answers": {"_attempt_history": stu_hist_list}
+            }).eq("id", submission["id"]).execute()
+            st.rerun()
+        st.stop()
+
     questions = fetch_exam_questions_cached(exam["id"])
     scoring_cfg = exam.get("scoring_config") or {"p1": 0.25, "p2": 1.0, "p3": 0.5, "p4": 1.0}
     seed = submission["seed"]
@@ -3807,6 +4017,7 @@ elif st.session_state.role == "student":
 
     # ---------------- TRƯỜNG HỢP 2: ĐÃ NỘP BÀI ----------------
     else:
+        components.html("<script>try{const o=window.parent.document.getElementById('proctor-cam-lock-overlay');if(o)o.remove();}catch(e){}</script>", height=0)
         total, s1, s2, s3 = grade_exam(questions, saved_answers, seed, scoring_cfg)
         p1, p2, p3, p4 = get_shuffled_exam(questions, seed)
         max_total = round(
@@ -3818,7 +4029,8 @@ elif st.session_state.role == "student":
         )
         dur_str, st_str, sub_str = format_duration_vn(submission.get("started_at"), submission.get("submitted_at"))
 
-        st.success(f"🎉 Bạn đã hoàn thành bài kiểm tra! Điểm số hiện tại: **{submission.get('score', total)} / {max_total} điểm** (⏱️ Thời gian làm bài: **{dur_str}**)")
+        att_note = f" (Lần {cur_stu_att} | Lịch sử: {stu_hist_summary})" if stu_hist_list else ""
+        st.success(f"🎉 Bạn đã hoàn thành bài kiểm tra! Điểm số hiện tại: **{submission.get('score', total)} / {max_total} điểm** (⏱️ Thời gian làm bài: **{dur_str}**){att_note}")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Phần I (Trắc nghiệm ABCD)", f"{s1} điểm")
