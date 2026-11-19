@@ -9,7 +9,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kntt_mapping import decode_kntt_tag
 
-PARSER_VERSION = "V6.2 - Fix TikZ Graph/3D \def, tkz-tab BBT, unwrap scalebox & error .tex export"
+PARSER_VERSION = "V6.3 - Auto PNG for heavy/pattern TikZ, tkz-tab BBT & parallel compile"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
 _SYSTEM_HAS_TKZ_TAB = None
@@ -280,12 +280,74 @@ def compile_latex_snippet_to_svg(latex_snippet):
                 timeout=20
             )
             if os.path.exists(pdf_file):
-                subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
-                with open(svg_file, "rb") as f:
-                    b64_svg = base64.b64encode(f.read()).decode("utf-8")
+                def _render_pdf_to_compact_png(pdf_p, work_dir):
+                    png_out = os.path.join(work_dir, "fig_out.png")
+                    rendered = False
+                    if shutil.which("pdftoppm"):
+                        try:
+                            subprocess.run(
+                                ["pdftoppm", "-png", "-r", "160", "-singlefile", pdf_p, os.path.join(work_dir, "fig_out")],
+                                cwd=work_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=12
+                            )
+                            rendered = os.path.exists(png_out)
+                        except Exception:
+                            rendered = False
+                    if not rendered and shutil.which("gs"):
+                        try:
+                            subprocess.run(
+                                ["gs", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=png16m", "-r160", f"-sOutputFile={png_out}", pdf_p],
+                                cwd=work_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=12
+                            )
+                            rendered = os.path.exists(png_out)
+                        except Exception:
+                            rendered = False
+                    if not rendered:
+                        return None
+                    try:
+                        import io as _io
+                        from PIL import Image as _PILImage
+                        img = _PILImage.open(png_out).convert("RGB")
+                        if img.width > 820:
+                            new_h = max(1, int(img.height * (820 / img.width)))
+                            img = img.resize((820, new_h), _PILImage.LANCZOS)
+                        # Chuyển sang bảng màu 64 màu tối ưu cho đồ thị/gạch chéo -> cực nét và chỉ còn ~15-35 KB
+                        img_q = img.quantize(colors=64, method=2)
+                        buf = _io.BytesIO()
+                        img_q.save(buf, format="PNG", optimize=True)
+                        return buf.getvalue()
+                    except Exception:
+                        with open(png_out, "rb") as fp:
+                            return fp.read()
+
+                has_pattern_fill = bool(re.search(r"pattern\s*=", snippet_fixed))
+                img_mime = "image/svg+xml"
+                img_bytes = None
+
+                # Nếu hình có tô gạch chéo (pattern=...) -> chuyển thẳng sang PNG nén nhẹ (~20-35 KB) thay vì SVG nặng hàng MB
+                if has_pattern_fill:
+                    png_bytes = _render_pdf_to_compact_png(pdf_file, tmpdir)
+                    if png_bytes:
+                        img_mime = "image/png"
+                        img_bytes = png_bytes
+
+                if img_bytes is None:
+                    subprocess.run(["pdf2svg", pdf_file, svg_file], cwd=tmpdir, check=True, timeout=10)
+                    with open(svg_file, "rb") as f:
+                        svg_bytes = f.read()
+                    # Nếu SVG sinh ra nặng hơn 55 KB (nhiều nét phức tạp / samples lớn) -> tự động nén sang PNG nếu nhẹ hơn
+                    if len(svg_bytes) > 55_000:
+                        png_bytes = _render_pdf_to_compact_png(pdf_file, tmpdir)
+                        if png_bytes and len(png_bytes) < len(svg_bytes):
+                            img_mime = "image/png"
+                            img_bytes = png_bytes
+                    if img_bytes is None:
+                        img_mime = "image/svg+xml"
+                        img_bytes = svg_bytes
+
+                b64_img = base64.b64encode(img_bytes).decode("utf-8")
                 return (
                     f'<div style="text-align:center; margin: 14px 0; overflow-x:auto;">'
-                    f'<img src="data:image/svg+xml;base64,{b64_svg}" '
+                    f'<img src="data:{img_mime};base64,{b64_img}" '
                     f'style="max-width:100%; height:auto; background:white; padding:10px; border-radius:10px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.05);" />'
                     f'</div>'
                 )
