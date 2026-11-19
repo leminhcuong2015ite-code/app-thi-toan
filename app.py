@@ -491,6 +491,17 @@ def make_teacher_auth_token():
     secret_str = st.secrets.get("ADMIN_PASSWORD", "123456") + "_LMC_TEACHER"
     return hashlib.sha256(secret_str.encode("utf-8")).hexdigest()[:16]
 
+@st.dialog("⚠️ Xác nhận xóa đề thi")
+def confirm_delete_exam_dialog(exam_id, exam_title):
+    st.warning(f"**Bạn chắc chắn muốn xóa đề này?**\n\nĐề thi: **#{exam_id} - {exam_title}**")
+    c_yes, c_no = st.columns(2)
+    if c_yes.button("🗑️ Chắc chắn xóa", type="primary", use_container_width=True):
+        supabase.table("exams").delete().eq("id", exam_id).execute()
+        st.toast(f"✅ Đã xóa đề thi #{exam_id}!")
+        st.rerun()
+    if c_no.button("❌ Hủy bỏ", use_container_width=True):
+        st.rerun()
+
 # ================= HÀM XÓA CACHE WIDGET SỬA CÂU HỎI KHI XÓA/CẬP NHẬT =================
 def clear_edit_widget_state(prefixes=("st_tag_", "st_stem_", "st_sa_", "st_sol_", "st_opt_", "st_true_", "st_tf_", "db_tag_", "db_stem_", "db_sa_", "db_sol_", "db_opt_", "db_true_", "db_tf_")):
     """Xóa triệt để state của các ô nhập liệu trong st.session_state để khi xóa câu không bị lưu nhầm sang câu kế tiếp"""
@@ -739,11 +750,13 @@ def clean_leftover_spaces(txt):
     return txt.strip()
 
 def sanitize_question_obj(q):
-    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi (tự động biên dịch lại nếu câu cũ bị lỗi BBT tkz-tab hoặc sót lệnh)"""
+    """Đồng bộ làm sạch nội dung đề bài, phương án và lời giải của câu hỏi"""
     if not q:
         return q
     if "_uid" not in q:
         q["_uid"] = str(uuid.uuid4())[:8]
+    if q.get("_sanitized_fast_ver") == PARSER_VERSION:
+        return q
 
     has_external_includegraphics(q)
     raw_tex = q.get("raw_tex", "")
@@ -797,6 +810,7 @@ def sanitize_question_obj(q):
     elif q.get("part") == 2:
         for s in q.get("statements", []):
             s["text"] = clean_leftover_spaces(s.get("text", ""))
+    q["_sanitized_fast_ver"] = PARSER_VERSION
     return q
 
 def check_question_health(q):
@@ -1787,7 +1801,7 @@ if st.session_state.role == "teacher":
     # TAB 1: NGÂN HÀNG ĐỀ
     # -----------------------------------------------------------------
     with t_bank:
-        with st.expander("📊 0. Thống kê toàn bộ Ngân hàng câu hỏi & Lưu mã LaTeX (.tex) về máy", expanded=True):
+        with st.expander("📊 0. Thống kê toàn bộ Ngân hàng câu hỏi & Lưu mã LaTeX", expanded=True):
             all_meta = fetch_all_bank_metadata()
             if not all_meta:
                 st.info("📭 Ngân hàng câu hỏi hiện đang trống. Hãy nạp câu hỏi ở mục 1 bên dưới nhé!")
@@ -1926,14 +1940,14 @@ if st.session_state.role == "teacher":
                 if st.session_state.get("exported_bank_tex_blocks"):
                     dl_tex1, dl_tex2 = st.columns(2)
                     dl_tex1.download_button(
-                        "📄 Tải file .tex (Chỉ gồm các khối \\begin{ex}...\\end{ex})",
+                        "📄 Tải mã LaTeX dạng khối câu hỏi",
                         st.session_state["exported_bank_tex_blocks"].encode("utf-8"),
                         "ngan_hang_cau_hoi_ex_blocks.tex",
                         "text/plain",
                         use_container_width=True
                     )
                     dl_tex2.download_button(
-                        "📘 Tải file .tex hoàn chỉnh (Có \\documentclass biên dịch ngay)",
+                        "📘 Tải file LaTeX hoàn chỉnh",
                         st.session_state["exported_bank_tex_full"].encode("utf-8"),
                         "ngan_hang_cau_hoi_full_doc.tex",
                         "text/plain",
@@ -1941,7 +1955,7 @@ if st.session_state.role == "teacher":
                     )
 
         st.divider()
-        st.subheader("📥 1. Nạp câu hỏi từ file (.tex hoặc .txt) vào Ngân hàng")
+        st.subheader("📥 1. Nạp câu hỏi vào Ngân hàng")
         st.info("💡 Hỗ trợ nhận diện cả câu trắc nghiệm (`\\begin{ex}`) và bài tập Tự luận (`\\begin{bt}`). Bạn có thể chọn tự động loại bỏ câu thiếu mã ID, tự gán thủ công hoặc gán theo mặc định.")
 
         missing_id_mode = st.radio(
@@ -2001,6 +2015,7 @@ if st.session_state.role == "teacher":
 
                     clear_edit_widget_state()
                     st.session_state["staged_bank_qs"] = processed_qs
+                    st.session_state["staged_marked_remove"] = set()
                     st.session_state["dropped_no_id_count"] = dropped_no_id
                     st.session_state["dropped_ext_img_list"] = dropped_ext_img
                     st.session_state["dropped_ext_img_records"] = dropped_ext_img_records
@@ -2127,13 +2142,17 @@ if st.session_state.role == "teacher":
                         st.toast(f"Đã loại bỏ {untagged_count} câu thiếu mã ID!")
                         st.rerun()
 
-                with st.expander("👁️ Xem chi tiết, Sửa nội dung (Đề bài, Các phương án A-B-C-D / Đúng-Sai, Lời giải) hoặc Xóa nhanh từng câu hỏi", expanded=(warn_count > 0 or untagged_count > 0)):
+                if "staged_marked_remove" not in st.session_state:
+                    st.session_state["staged_marked_remove"] = set()
+                marked_remove_set = st.session_state["staged_marked_remove"]
+
+                with st.expander("👁️ Xem chi tiết, Sửa nội dung & Tích chọn loại bỏ câu hỏi", expanded=(warn_count > 0 or untagged_count > 0)):
                     flt_mode = st.radio(
                         "Chế độ lọc câu hỏi xem trước:",
                         [
                             "Xem tất cả câu hỏi",
-                            "🏷️ Chỉ xem các câu CHƯA CÓ MÃ ID",
-                            "⚠️ Chỉ xem các câu có cảnh báo (Lỗi TikZ / Trống lời giải)"
+                            "🏷️ Chỉ xem câu chưa có Mã ID",
+                            "⚠️ Chỉ xem câu có cảnh báo"
                         ],
                         horizontal=True,
                         key="pre_flt"
@@ -2159,24 +2178,29 @@ if st.session_state.role == "teacher":
                         page_size = len(filtered_pre_qs) if pre_page_opt == "Tất cả" else int(pre_page_opt)
                         total_pages = max(1, (len(filtered_pre_qs) + page_size - 1) // page_size)
                         cur_page = pg_c2.number_input(
-                            f"Trang xem trước (1 - {total_pages}, tổng {len(filtered_pre_qs)} câu):",
+                            f"Trang xem trước — Tổng {len(filtered_pre_qs)} câu:",
                             min_value=1, max_value=total_pages, value=1, key="pre_page"
                         )
                         start_i = (cur_page - 1) * page_size
                         for orig_idx, q_item in filtered_pre_qs[start_i:start_i + page_size]:
-                            q_uid = f"{q_item.get('_uid', q_item.get('id', orig_idx))}_{q_item.get('question_hash', '')[:8]}_v{staged_ver}"
+                            raw_uid = q_item.get("_uid", q_item.get("id", str(orig_idx)))
+                            q_uid = f"{raw_uid}_{q_item.get('question_hash', '')[:8]}_v{staged_ver}"
                             orig_q_code = q_item.get("id", f"q_{orig_idx + 1}")
-                            col_q, col_btn = st.columns([6, 1])
+                            col_q, col_chk = st.columns([6, 1.1])
                             with col_q:
-                                render_question_card(q_item, f"Câu {orig_idx + 1} ({orig_q_code})")
-                            with col_btn:
-                                if st.button("🗑️ Xóa ngay", key=f"del_stage_{q_uid}"):
-                                    staged_qs.pop(orig_idx)
-                                    clear_edit_widget_state()
-                                    st.session_state["staged_bank_qs"] = staged_qs
-                                    st.session_state["staged_ver"] = staged_ver + 1
-                                    st.rerun()
-                            with st.expander(f"✏️ Tự gán Mã ID / Sửa nội dung & phương án Câu {orig_idx + 1} [{orig_q_code} — {q_item.get('tag_id', 'Chưa gắn mã')}]"):
+                                render_question_card(q_item, f"Câu {orig_idx + 1} - {orig_q_code}")
+                            with col_chk:
+                                st.markdown("<div style='padding-top:10px;'></div>", unsafe_allow_html=True)
+                                is_rm = st.checkbox(
+                                    "🗑️ Loại bỏ",
+                                    value=(raw_uid in marked_remove_set),
+                                    key=f"chk_rm_stage_{q_uid}"
+                                )
+                                if is_rm:
+                                    marked_remove_set.add(raw_uid)
+                                else:
+                                    marked_remove_set.discard(raw_uid)
+                            with st.expander(f"✏️ Sửa Mã ID & nội dung Câu {orig_idx + 1} — {q_item.get('tag_id', 'Chưa gắn mã')}"):
                                 u_tag, u_stem, new_opts, new_stmts, u_sa, u_sol = render_question_edit_controls(q_item, q_uid)
                                 if st.button("💾 Lưu chỉnh sửa câu này", key=f"btn_save_st_{q_uid}", type="primary"):
                                     staged_qs[orig_idx] = apply_quick_edit_to_question(
@@ -2189,22 +2213,42 @@ if st.session_state.role == "teacher":
                                     st.rerun()
                             st.divider()
 
-                st.markdown("##### 💾 Tùy chọn chế độ lọc trước khi Lưu vào Ngân hàng câu hỏi:")
+                        valid_marked_cnt = sum(1 for q in staged_qs if q.get("_uid") in marked_remove_set)
+                        if valid_marked_cnt > 0:
+                            if st.button(
+                                f"🗑️ Xóa ngay {valid_marked_cnt} câu đã tích chọn loại bỏ khỏi danh sách tạm",
+                                key=f"btn_apply_rm_marked_{staged_ver}",
+                                use_container_width=True
+                            ):
+                                new_kept = [q for q in staged_qs if q.get("_uid") not in marked_remove_set]
+                                st.session_state["staged_marked_remove"] = set()
+                                clear_edit_widget_state()
+                                st.session_state["staged_bank_qs"] = new_kept
+                                st.session_state["staged_ver"] = staged_ver + 1
+                                st.toast(f"✅ Đã loại bỏ {valid_marked_cnt} câu đã tích chọn!")
+                                st.rerun()
+
+                st.markdown("##### 💾 Tùy chọn lọc trước khi Lưu vào Ngân hàng câu hỏi:")
                 save_filter_mode = st.radio(
-                    "Chọn nhóm câu hỏi bạn muốn nạp vào Ngân hàng:",
+                    "Chọn nhóm câu hỏi nạp vào Ngân hàng:",
                     [
-                        "🟢 Chỉ lưu các câu HIỂN THỊ TỐT & có Mã ID (Tự động loại bỏ câu Lỗi hình TikZ, Sót lệnh LaTeX và Trống lời giải)",
-                        "🟡 Lưu các câu hiển thị tốt + câu chỉ Trống lời giải (Vẫn tự động loại bỏ câu Lỗi hình TikZ và Sót lệnh LaTeX)",
-                        "🟠 Lưu tất cả các câu đã có Mã ID trong danh sách tạm (Bao gồm cả câu đang có cảnh báo lỗi)"
+                        "🟢 Chỉ lưu câu hiển thị tốt & có Mã ID",
+                        "🟡 Lưu câu hiển thị tốt & câu trống lời giải",
+                        "🟠 Lưu tất cả câu đã có Mã ID"
                     ],
                     index=0,
                     key="bank_save_filter_mode"
                 )
 
-                # Phân loại câu sẽ lưu và câu bị loại bỏ theo chế độ đã chọn
+                # Phân loại câu sẽ lưu và câu bị loại bỏ (bao gồm cả các câu đã tích chọn Loại bỏ)
                 candidate_save_qs = []
                 rejected_on_save_records = list(dropped_img_records)
+                marked_rm_count = 0
                 for q in staged_qs:
+                    if q.get("_uid") in marked_remove_set:
+                        marked_rm_count += 1
+                        rejected_on_save_records.append({"q": q, "reason": "Giáo viên tích chọn loại bỏ"})
+                        continue
                     sanitize_question_obj(q)
                     h_status = check_question_health(q)
                     is_untagged = (q.get("tag_id") == "Chưa gắn mã")
@@ -2223,8 +2267,11 @@ if st.session_state.role == "teacher":
                             continue
                     candidate_save_qs.append(q)
 
+                if marked_rm_count > 0:
+                    st.info(f"☑️ Đang tích chọn loại bỏ **{marked_rm_count} câu hỏi** — các câu này sẽ tự động không được lưu vào Ngân hàng.")
+
                 if st.button(
-                    f"📥 Lưu {len(candidate_save_qs)} câu hỏi đạt chuẩn vào Ngân hàng (Loại bỏ {len(staged_qs) - len(candidate_save_qs)} câu lỗi/thiếu ID)",
+                    f"📥 Lưu {len(candidate_save_qs)} câu hỏi đạt chuẩn vào Ngân hàng",
                     type="primary",
                     use_container_width=True
                 ):
@@ -2285,25 +2332,46 @@ if st.session_state.role == "teacher":
         st.divider()
         st.subheader("🔍 2. Duyệt, Kiểm tra hiển thị, Xuất LaTeX & Sửa/Xóa câu hỏi trong Ngân hàng")
 
-        b_col1, b_col2, b_col3 = st.columns([1, 2, 2])
-        b_sel_g = b_col1.selectbox("Lọc theo Khối:", ["12", "11", "10", "9", "8", "7", "6"], key="b_mgr_g")
-        b_avail_chaps = KNTT_DATA[b_sel_g]["chapters"]
-        b_sel_c = b_col2.selectbox("Lọc theo Chương:", list(b_avail_chaps.keys()), format_func=lambda k: b_avail_chaps[k], key="b_mgr_c")
-        b_chap_lessons = {b_k: b_v[1] for b_k, b_v in KNTT_DATA[b_sel_g]["lessons"].items() if b_v[0] == b_sel_c}
-        b_sel_lessons = b_col3.multiselect(
-            "Lọc theo Bài học (Để trống = Cả chương):",
-            options=list(b_chap_lessons.keys()),
-            format_func=lambda k: b_chap_lessons[k],
-            key="b_mgr_l"
-        )
+        b_col1, b_col2, b_col3 = st.columns([1.2, 2, 2])
+        b_sel_g = b_col1.selectbox("Lọc theo Khối:", ["-- Chọn Khối --", "12", "11", "10", "9", "8", "7", "6"], index=0, key="b_mgr_g")
 
-        bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id").execute().data
-        if b_sel_lessons:
-            bank_items = [item for item in bank_items if item["lesson_code"] in b_sel_lessons]
-
-        if not bank_items:
-            st.info("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này.")
+        b_sel_c = "-- Chọn Chương --"
+        b_avail_chaps = {}
+        b_sel_lessons = []
+        if b_sel_g != "-- Chọn Khối --":
+            b_avail_chaps = KNTT_DATA[b_sel_g]["chapters"]
+            b_sel_c = b_col2.selectbox(
+                "Lọc theo Chương:",
+                ["-- Chọn Chương --"] + list(b_avail_chaps.keys()),
+                format_func=lambda k: b_avail_chaps[k] if k in b_avail_chaps else k,
+                index=0,
+                key=f"b_mgr_c_{b_sel_g}"
+            )
+            if b_sel_c != "-- Chọn Chương --":
+                b_chap_lessons = {b_k: b_v[1] for b_k, b_v in KNTT_DATA[b_sel_g]["lessons"].items() if b_v[0] == b_sel_c}
+                b_sel_lessons = b_col3.multiselect(
+                    "Lọc theo Bài học:",
+                    options=list(b_chap_lessons.keys()),
+                    format_func=lambda k: b_chap_lessons[k],
+                    key=f"b_mgr_l_{b_sel_g}_{b_sel_c}"
+                )
+            else:
+                b_col3.multiselect("Lọc theo Bài học:", [], disabled=True, key=f"b_mgr_l_dis_{b_sel_g}")
         else:
+            b_col2.selectbox("Lọc theo Chương:", ["-- Chọn Chương --"], disabled=True, key="b_mgr_c_dis")
+            b_col3.multiselect("Lọc theo Bài học:", [], disabled=True, key="b_mgr_l_dis")
+
+        bank_items = []
+        if b_sel_g == "-- Chọn Khối --" or b_sel_c == "-- Chọn Chương --":
+            st.info("👆 Chọn Khối và Chương ở trên để tải danh sách câu hỏi trong Ngân hàng.")
+        else:
+            bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id").execute().data
+            if b_sel_lessons:
+                bank_items = [item for item in bank_items if item["lesson_code"] in b_sel_lessons]
+
+        if b_sel_g != "-- Chọn Khối --" and b_sel_c != "-- Chọn Chương --" and not bank_items:
+            st.info("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này.")
+        elif bank_items:
             for it in bank_items:
                 qd_ref = it.get("question_data") or {}
                 if it.get("raw_tex") and not qd_ref.get("raw_tex"):
@@ -2316,7 +2384,7 @@ if st.session_state.role == "teacher":
                 f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
             )
 
-            if st.button("🔧 Tự động biên dịch lại Bảng biến thiên / Xóa lệnh thừa (\scalebox, \def) & Loại bỏ câu chứa \includegraphics trong mục đang lọc", use_container_width=True):
+            if st.button("🔧 Biên dịch lại Bảng biến thiên & Dọn câu lỗi trong mục này", use_container_width=True):
                 fixed_cnt = 0
                 removed_inc_cnt = 0
                 with st.spinner("Đang quét, biên dịch lại bảng biến thiên tkz-tab và dọn câu chứa \includegraphics..."):
@@ -2360,14 +2428,14 @@ if st.session_state.role == "teacher":
 
             tex_c1, tex_c2 = st.columns(2)
             tex_c1.download_button(
-                f"📄 Tải mã LaTeX ({len(bank_items)} câu đang lọc - Khối \\begin{{ex}})",
+                f"📄 Tải mã LaTeX dạng khối ({len(bank_items)} câu)",
                 build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=False).encode("utf-8"),
                 f"ngan_hang_K{b_sel_g}_{b_sel_c}_ex.tex",
                 "text/plain",
                 use_container_width=True
             )
             tex_c2.download_button(
-                f"📘 Tải file .tex hoàn chỉnh ({len(bank_items)} câu đang lọc - Đủ \\documentclass)",
+                f"📘 Tải file LaTeX hoàn chỉnh ({len(bank_items)} câu)",
                 build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=True).encode("utf-8"),
                 f"ngan_hang_K{b_sel_g}_{b_sel_c}_full.tex",
                 "text/plain",
@@ -2503,13 +2571,16 @@ if st.session_state.role == "teacher":
             del_scope = st.radio(
                 "Chọn phạm vi Ngân hàng muốn xóa:",
                 [
-                    "🔥 Xóa TOÀN BỘ Ngân hàng câu hỏi (Tất cả các Khối 6 - 12) & Reset ID Kho về #1",
-                    f"🧹 Chỉ xóa câu hỏi thuộc Khối {b_sel_g} đang chọn ở trên"
+                    "🔥 Xóa toàn bộ Ngân hàng câu hỏi & Reset ID Kho về #1",
+                    "🧹 Chỉ xóa câu hỏi theo Khối lớp"
                 ],
                 key="del_bank_scope"
             )
+            wipe_grade = b_sel_g if b_sel_g != "-- Chọn Khối --" else "12"
+            if del_scope.startswith("🧹"):
+                wipe_grade = st.selectbox("Chọn Khối lớp cần xóa:", ["12", "11", "10", "9", "8", "7", "6"], index=["12", "11", "10", "9", "8", "7", "6"].index(wipe_grade), key="wipe_grade_sel")
             confirm_chk = st.checkbox("Tôi đã hiểu và chắc chắn muốn xóa dữ liệu Ngân hàng câu hỏi đã chọn.", key="chk_wipe_bank")
-            confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` (viết hoa, không dấu) để mở khóa nút xóa:", key="txt_wipe_bank")
+            confirm_txt = st.text_input("Nhập chính xác cụm từ `XOA NGAN HANG` để mở khóa nút xóa:", key="txt_wipe_bank")
 
             can_wipe = confirm_chk and (confirm_txt.strip() == "XOA NGAN HANG")
             if st.button("🗑️ TIẾN HÀNH XÓA & ĐÁNH SỐ LẠI ID KHO", type="primary", disabled=not can_wipe):
@@ -2521,12 +2592,12 @@ if st.session_state.role == "teacher":
                             supabase.table("question_bank").delete().gt("id", 0).execute()
                         st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và đặt lại ID Kho bắt đầu từ #1!")
                     else:
-                        supabase.table("question_bank").delete().eq("grade", b_sel_g).execute()
+                        supabase.table("question_bank").delete().eq("grade", wipe_grade).execute()
                         try:
                             supabase.rpc("sync_question_bank_seq").execute()
                         except Exception:
                             pass
-                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {b_sel_g} và đồng bộ lại bộ đếm ID!")
+                        st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {wipe_grade} và đồng bộ lại bộ đếm ID!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Lỗi khi xóa ngân hàng: {e}")
@@ -2692,14 +2763,14 @@ if st.session_state.role == "teacher":
 
                             dr_dl1, dr_dl2 = st.columns(2)
                             dr_dl1.download_button(
-                                "📄 Tải mã LaTeX đề nháp này (Chỉ khối \\begin{ex})",
+                                "📄 Tải mã LaTeX đề nháp dạng khối",
                                 build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=False).encode("utf-8"),
                                 "de_nhap_ex_blocks.tex",
                                 "text/plain",
                                 use_container_width=True
                             )
                             dr_dl2.download_button(
-                                "📘 Tải file .tex hoàn chỉnh của đề nháp này (Đủ \\documentclass)",
+                                "📘 Tải file LaTeX hoàn chỉnh của đề nháp",
                                 build_latex_export_content(draft_qs, title="ĐỀ KIỂM TRA ĐÁNH GIÁ MÔN TOÁN", full_document=True).encode("utf-8"),
                                 "de_nhap_full_doc.tex",
                                 "text/plain",
@@ -2768,7 +2839,7 @@ if st.session_state.role == "teacher":
                                     st.rerun()
 
         with sub_create_fast:
-            st.subheader("📄 Tải lên trực tiếp 1 đề thi hoàn chỉnh (.tex hoặc .txt)")
+            st.subheader("📄 Tải lên trực tiếp 1 đề thi hoàn chỉnh")
             c_grade, c_chap = st.columns([1, 2.5])
             grade_sel = c_grade.selectbox("Chọn Khối lớp áp dụng", ["12", "11", "10", "9", "8", "7", "6"])
             topic_options = get_topic_options_for_grade(grade_sel)
@@ -2858,7 +2929,7 @@ if st.session_state.role == "teacher":
         ])
 
         with sub_mgr_list:
-            st.subheader("📚 Danh sách Đề thi đã soạn (Tải LaTeX .tex, Sửa phương án, Đổi câu hỏi & Mở lời giải)")
+            st.subheader("📚 Danh sách Đề thi đã soạn")
             exams_data = supabase.table("exams").select("*").order("grade", desc=True).order("chapter").order("id", desc=True).execute().data
             if not exams_data:
                 st.info("Chưa có đề thi nào trong hệ thống.")
@@ -2891,13 +2962,12 @@ if st.session_state.role == "teacher":
                                     use_container_width=True
                                 )
                                 if c5.button("🗑️ Xóa đề", key=f"del_{ex['id']}", use_container_width=True):
-                                    supabase.table("exams").delete().eq("id", ex["id"]).execute()
-                                    st.rerun()
+                                    confirm_delete_exam_dialog(ex["id"], ex["title"])
 
                                 with st.expander(f"👁️ Xem toàn bộ đề, Tải LaTeX, Sửa phương án & Đổi câu hỏi của đề #{ex['id']} - {ex['title']}"):
                                     ex_dl1, ex_dl2 = st.columns(2)
                                     ex_dl1.download_button(
-                                        "📄 Tải file .tex (Chỉ gồm các khối \\begin{ex}...\\end{ex})",
+                                        "📄 Tải mã LaTeX dạng khối câu hỏi",
                                         build_latex_export_content(ex_qs, title=ex["title"], full_document=False).encode("utf-8"),
                                         f"de_{ex['id']}_ex_blocks.tex",
                                         "text/plain",
@@ -2905,7 +2975,7 @@ if st.session_state.role == "teacher":
                                         use_container_width=True
                                     )
                                     ex_dl2.download_button(
-                                        "📘 Tải file .tex hoàn chỉnh (Đủ \\documentclass biên dịch ngay)",
+                                        "📘 Tải file LaTeX hoàn chỉnh",
                                         build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
                                         f"de_{ex['id']}_full_doc.tex",
                                         "text/plain",
@@ -3042,7 +3112,7 @@ if st.session_state.role == "teacher":
                                 st.success("Đã cập nhật điểm số!")
                                 st.rerun()
 
-                            if st.button("🔄 Xóa lượt làm bài này (Cho phép học sinh thi lại)"):
+                            if st.button("🔄 Xóa lượt làm bài này"):
                                 supabase.table("submissions").delete().eq("id", chosen_sub["id"]).execute()
                                 st.success("Đã xóa lượt làm bài! Học sinh có thể vào thi lại.")
                                 st.rerun()
@@ -3135,7 +3205,7 @@ if st.session_state.role == "teacher":
                     st.rerun()
 
         st.divider()
-        st.subheader("2. Danh sách Học sinh theo từng Lớp (Chọn cả lớp, Sửa hoặc Xóa nhanh)")
+        st.subheader("2. Danh sách Học sinh theo từng Lớp")
         all_stu = supabase.table("students").select("*").order("class_name").order("username").execute().data
         if not all_stu:
             st.info("Chưa có học sinh nào trong hệ thống.")
@@ -3150,7 +3220,7 @@ if st.session_state.role == "teacher":
                 with st.expander(f"🏫 Lớp {cls_name} — Sĩ số: {len(cls_students)} học sinh (Khối {extract_grade_from_class(cls_name)})", expanded=False):
                     # Dùng key có gắn phiên bản _v{cls_ver} để không bao giờ gây lỗi StreamlitWidgetAlreadyInstantiatedError khi reset sau xóa
                     tick_all_cls = st.checkbox(
-                        f"☑️ Chọn cả lớp {cls_name} (Tích chọn toàn bộ {len(cls_students)} học sinh)",
+                        f"☑️ Chọn cả lớp {cls_name}",
                         key=f"chk_all_stu_{cls_name}_v{cls_ver}"
                     )
 
