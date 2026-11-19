@@ -12,33 +12,35 @@ from kntt_mapping import decode_kntt_tag
 PARSER_VERSION = "V6.2 - Fix TikZ Graph/3D \def, tkz-tab BBT, unwrap scalebox & error .tex export"
 
 _TKZ_TAB_PATH = "/tmp/tkz-tab.sty"
+_SYSTEM_HAS_TKZ_TAB = None
 
 
-def _has_system_tkz_tab():
-    r"""Kiểm tra xem gói texlive-pictures trên máy chủ đã cài sẵn tkz-tab.sty chưa"""
-    if not shutil.which("kpsewhich"):
-        return False
-    try:
-        res = subprocess.run(["kpsewhich", "tkz-tab.sty"], capture_output=True, text=True, timeout=5)
-        return bool(res.stdout and res.stdout.strip())
-    except Exception:
-        return False
-
-
-_SYSTEM_HAS_TKZ_TAB = _has_system_tkz_tab()
-
-if not _SYSTEM_HAS_TKZ_TAB and not os.path.exists(_TKZ_TAB_PATH):
-    for _tkz_url in (
-        "https://mirrors.ctan.org/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
-        "https://ctan.math.washington.edu/tex-archive/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
-        "https://mirrors.mit.edu/CTAN/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
-    ):
-        try:
-            urllib.request.urlretrieve(_tkz_url, _TKZ_TAB_PATH)
-            if os.path.exists(_TKZ_TAB_PATH) and os.path.getsize(_TKZ_TAB_PATH) > 1000:
-                break
-        except Exception:
-            pass
+def _ensure_tkz_tab_ready():
+    r"""Chỉ kiểm tra/tải tkz-tab.sty ĐÚNG 1 LẦN khi thực sự có bảng biến thiên cần biên dịch (không chạy lúc import)"""
+    global _SYSTEM_HAS_TKZ_TAB
+    if _SYSTEM_HAS_TKZ_TAB is None:
+        _SYSTEM_HAS_TKZ_TAB = False
+        if shutil.which("kpsewhich"):
+            try:
+                res = subprocess.run(["kpsewhich", "tkz-tab.sty"], capture_output=True, text=True, timeout=5)
+                _SYSTEM_HAS_TKZ_TAB = bool(res.stdout and res.stdout.strip())
+            except Exception:
+                _SYSTEM_HAS_TKZ_TAB = False
+    if not _SYSTEM_HAS_TKZ_TAB and not os.path.exists(_TKZ_TAB_PATH):
+        for _tkz_url in (
+            "https://mirrors.ctan.org/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+            "https://ctan.math.washington.edu/tex-archive/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+            "https://mirrors.mit.edu/CTAN/graphics/pgf/contrib/tkz-tab/latex/tkz-tab.sty",
+        ):
+            try:
+                with urllib.request.urlopen(_tkz_url, timeout=5) as resp:
+                    data = resp.read()
+                if len(data) > 1000:
+                    with open(_TKZ_TAB_PATH, "wb") as f_out:
+                        f_out.write(data)
+                    break
+            except Exception:
+                pass
 
 
 def extract_braced_args(text, start_pos, num_args):
@@ -212,8 +214,11 @@ def compile_latex_snippet_to_svg(latex_snippet):
     # Loại bỏ dòng trống (paragraph break \par) bên trong khối hình để tránh lỗi lrbox của LaTeX
     snippet_fixed = "\n".join(line for line in snippet_fixed.splitlines() if line.strip())
 
-    # Chỉ nạp thêm \usepackage{tkz-tab} khi trong hình có lệnh của tkz-tab (giữ nguyên môi trường TikZ chuẩn cho đồ thị & hình không gian)
-    extra_pkg = r"\usepackage{tkz-tab}" if ("tkzTab" in snippet_fixed or "tkz-tab" in snippet_fixed) else ""
+    # Chỉ kiểm tra và nạp \usepackage{tkz-tab} khi trong hình thực sự có bảng biến thiên
+    need_tkz_tab = ("tkzTab" in snippet_fixed or "tkz-tab" in snippet_fixed)
+    if need_tkz_tab:
+        _ensure_tkz_tab_ready()
+    extra_pkg = r"\usepackage{tkz-tab}" if need_tkz_tab else ""
 
     tex_doc = (
         r"\documentclass[11pt]{article}" + "\n"
@@ -715,7 +720,7 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
     return parsed_q
 
 
-def parse_exam_tex(tex_content, progress_callback=None, max_workers=4):
+def parse_exam_tex(tex_content, progress_callback=None, max_workers=2):
     r"""Đọc toàn bộ file .tex/.txt (cả môi trường ex và bt) song song đa luồng, giữ đúng thứ tự xuất hiện"""
     pattern = re.compile(r'\\begin\{(ex|bt)\}(.*?)\\end\{\1\}', flags=re.DOTALL)
     matches = [(idx, m.group(1), m.group(2)) for idx, m in enumerate(pattern.finditer(tex_content))]

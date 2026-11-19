@@ -19,9 +19,7 @@ from PIL import Image as PILImage
 import kntt_mapping
 import latex_parser
 
-# Tự động nạp lại module phụ mỗi khi cập nhật code trên GitHub mà không cần Reboot app
-importlib.reload(kntt_mapping)
-importlib.reload(latex_parser)
+# Giữ module ổn định trong bộ nhớ để học sinh làm bài mượt mà, không chạy lại lệnh khởi tạo mỗi lần click
 
 from latex_parser import parse_exam_tex, clean_latex_to_markdown, ensure_displaystyle_int, strip_tex_definitions, unwrap_all_box_wrappers, PARSER_VERSION
 from kntt_mapping import KNTT_DATA, LEVEL_MAP, decode_kntt_tag
@@ -518,6 +516,7 @@ def confirm_delete_exam_dialog(exam_id, exam_title):
     c_yes, c_no = st.columns(2)
     if c_yes.button("🗑️ Chắc chắn xóa", type="primary", use_container_width=True):
         supabase.table("exams").delete().eq("id", exam_id).execute()
+        clear_all_data_caches()
         st.toast(f"✅ Đã xóa đề thi #{exam_id}!")
         st.rerun()
     if c_no.button("❌ Hủy bỏ", use_container_width=True):
@@ -555,6 +554,59 @@ def fetch_all_bank_metadata():
             break
         offset += batch_size
     return all_rows
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_active_exams_meta_for_grade(grade_str):
+    """Tải danh sách đề đang mở cho học sinh (KHÔNG tải cột questions nặng để vào phòng thi tức thì)"""
+    def _q():
+        return (
+            supabase.table("exams")
+            .select("id, title, grade, chapter, duration, scoring_config, show_solutions, is_active")
+            .eq("is_active", True)
+            .eq("grade", str(grade_str))
+            .order("chapter")
+            .order("id", desc=True)
+            .execute()
+            .data
+        )
+    return run_with_retry(_q, retries=3, delay=1.0)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_exam_questions_cached(exam_id):
+    """Tải và cache bộ câu hỏi của ĐÚNG 1 đề thi (dùng chung cho cả lớp thi cùng lúc, giảm 95% tải Supabase)"""
+    def _q():
+        res = supabase.table("exams").select("questions").eq("id", exam_id).limit(1).execute().data
+        return (res[0].get("questions") or []) if res else []
+    return run_with_retry(_q, retries=3, delay=1.0)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_all_exams_meta():
+    """Tải danh sách siêu dữ liệu đề thi cho Giáo viên (không kèm cột questions nặng)"""
+    def _q():
+        return (
+            supabase.table("exams")
+            .select("id, title, grade, chapter, duration, scoring_config, show_solutions, is_active")
+            .order("grade", desc=True)
+            .order("chapter")
+            .order("id", desc=True)
+            .execute()
+            .data
+        )
+    return run_with_retry(_q, retries=3, delay=1.0)
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_all_students_cached():
+    """Tải và cache danh sách học sinh theo lớp"""
+    def _q():
+        return supabase.table("students").select("*").order("class_name").order("username").execute().data
+    return run_with_retry(_q, retries=3, delay=1.0)
+
+def clear_all_data_caches():
+    fetch_all_bank_metadata.clear()
+    fetch_active_exams_meta_for_grade.clear()
+    fetch_exam_questions_cached.clear()
+    fetch_all_exams_meta.clear()
+    fetch_all_students_cached.clear()
 
 def fetch_all_bank_full_questions(grade_filter=None):
     """Tải toàn bộ dữ liệu câu hỏi kèm raw_tex từ Ngân hàng để xuất file LaTeX (.tex)"""
@@ -1795,7 +1847,7 @@ with st.sidebar:
         st.write("👨‍🏫 **Chế độ Giáo viên Quản trị**")
         st.caption(f"⚙️ Bộ biên dịch: `{PARSER_VERSION}`")
         if st.button("🔄 Làm mới dữ liệu", use_container_width=True, type="primary"):
-            fetch_all_bank_metadata.clear()
+            clear_all_data_caches()
             st.toast("✅ Đã cập nhật dữ liệu mới nhất từ hệ thống!")
             st.rerun()
     if st.button("🚪 Đăng xuất", use_container_width=True):
@@ -1812,21 +1864,29 @@ if st.session_state.role == "teacher":
     top_c1, top_c2 = st.columns([5.2, 1.8])
     with top_c2:
         if st.button("🔄 Làm mới kết quả & dữ liệu", key="top_refresh_btn", type="primary", use_container_width=True):
-            fetch_all_bank_metadata.clear()
+            clear_all_data_caches()
             st.toast("✅ Đã tải lại kết quả thi và dữ liệu mới nhất!")
             st.rerun()
 
-    t_bank, t_create, t_manage, t_stu = st.tabs([
-        "🏦 Ngân hàng đề",
-        "🎲 Tạo đề",
-        "📂 Quản lý đề",
-        "👥 Quản lý học sinh"
-    ])
+    # Thanh điều hướng chỉ tải ĐÚNG chức năng đang mở (không chạy ngầm Ngân hàng đề hay Tạo đề khi không dùng)
+    active_nav = st.radio(
+        "Chọn phân khu làm việc:",
+        [
+            "📂 Quản lý đề",
+            "🎲 Tạo đề",
+            "🏦 Ngân hàng đề",
+            "👥 Quản lý học sinh"
+        ],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="teacher_active_nav"
+    )
+    st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
 
     # -----------------------------------------------------------------
-    # TAB 1: NGÂN HÀNG ĐỀ
+    # PHÂN KHU 1: NGÂN HÀNG ĐỀ (CHỈ CHẠY KHI GIÁO VIÊN CHỌN MỞ)
     # -----------------------------------------------------------------
-    with t_bank:
+    if active_nav == "🏦 Ngân hàng đề":
         with st.expander("📊 0. Thống kê toàn bộ Ngân hàng câu hỏi & Lưu mã LaTeX", expanded=True):
             try:
                 all_meta = fetch_all_bank_metadata()
@@ -2018,7 +2078,7 @@ if st.session_state.role == "teacher":
                 def _on_parse_prog(done, total):
                     pct = min(1.0, done / max(1, total))
                     prog_bar.progress(pct, text=f"Đang biên dịch câu hỏi LaTeX/TikZ: {done}/{total} câu...")
-                parsed_qs = parse_exam_tex(raw_bank_tex, progress_callback=_on_parse_prog, max_workers=4)
+                parsed_qs = parse_exam_tex(raw_bank_tex, progress_callback=_on_parse_prog, max_workers=2)
                 prog_bar.empty()
                 st.session_state["raw_parsed_total_count"] = len(parsed_qs)
                 processed_qs = []
@@ -2679,15 +2739,18 @@ if st.session_state.role == "teacher":
                     st.error(f"Lỗi khi xóa ngân hàng: {e}")
 
     # -----------------------------------------------------------------
-    # TAB 2: TẠO ĐỀ (GỘP TRỘN ĐỀ THEO MA TRẬN & TẠO ĐỀ NHANH TỪ FILE)
+    # PHÂN KHU 2: TẠO ĐỀ (CHỈ CHẠY KHI GIÁO VIÊN CHỌN MỞ)
     # -----------------------------------------------------------------
-    with t_create:
-        sub_create_mat, sub_create_fast = st.tabs([
-            "🎲 Trộn theo ma trận",
-            "📄 Nạp đề từ file"
-        ])
+    elif active_nav == "🎲 Tạo đề":
+        create_mode = st.radio(
+            "Chế độ tạo đề:",
+            ["🎲 Trộn theo ma trận", "📄 Nạp đề từ file"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="create_exam_sub_mode"
+        )
 
-        with sub_create_mat:
+        if create_mode == "🎲 Trộn theo ma trận":
             st.subheader("🎲 Thiết lập Ma trận & Rút câu hỏi ngẫu nhiên theo từng Bài học")
             st.info("💡 Chọn Chương và các Bài học đã dạy, sau đó nhập số lượng câu hỏi cần lấy riêng cho từng Bài học ở bên dưới.")
 
@@ -2725,7 +2788,7 @@ if st.session_state.role == "teacher":
                 else:
                     q_query = (
                         supabase.table("question_bank")
-                        .select("*")
+                        .select("id, grade, chapter_code, lesson_code, level_code, part")
                         .eq("grade", sel_g)
                         .in_("chapter_code", sel_chaps)
                         .in_("lesson_code", sel_lessons)
@@ -2807,7 +2870,7 @@ if st.session_state.role == "teacher":
                         )
 
                         if st.button("🎲 Bốc câu hỏi tạo Bản nháp Đề thi theo Ma trận trên", type="primary"):
-                            selected_qs = []
+                            picked_ids = []
                             for p_idx in [1, 2, 3, 4]:
                                 for b_code in sel_lessons:
                                     for lvl in ["N", "H", "V", "C"]:
@@ -2815,12 +2878,20 @@ if st.session_state.role == "teacher":
                                         if need_cnt > 0:
                                             pool = lesson_pools[b_code][p_idx][lvl]
                                             chosen_items = random.sample(pool, need_cnt)
-                                            for item in chosen_items:
-                                                q_copy = sanitize_question_obj(item["question_data"].copy())
-                                                if item.get("raw_tex") and not q_copy.get("raw_tex"):
-                                                    q_copy["raw_tex"] = item["raw_tex"]
-                                                q_copy["id"] = f"q_{len(selected_qs) + 1}"
-                                                selected_qs.append(q_copy)
+                                            picked_ids.extend([it["id"] for it in chosen_items])
+
+                            selected_qs = []
+                            if picked_ids:
+                                full_picked = supabase.table("question_bank").select("id, question_data, raw_tex").in_("id", picked_ids).execute().data
+                                id_to_row = {r["id"]: r for r in full_picked}
+                                for pid in picked_ids:
+                                    item = id_to_row.get(pid)
+                                    if item and item.get("question_data"):
+                                        q_copy = sanitize_question_obj(item["question_data"].copy())
+                                        if item.get("raw_tex") and not q_copy.get("raw_tex"):
+                                            q_copy["raw_tex"] = item["raw_tex"]
+                                        q_copy["id"] = f"q_{len(selected_qs) + 1}"
+                                        selected_qs.append(q_copy)
 
                             if not selected_qs:
                                 st.warning("Bạn chưa chọn số lượng câu hỏi nào (> 0) ở ma trận các bài học phía trên!")
@@ -2911,10 +2982,11 @@ if st.session_state.role == "teacher":
                                         "is_active": True
                                     }).execute()
                                     del st.session_state["draft_matrix_qs"]
+                                    clear_all_data_caches()
                                     st.success(f"🎉 Đã xuất bản đề thi **{mat_title}** thành công! Bạn có thể xem ở tab **Quản lý đề**.")
                                     st.rerun()
 
-        with sub_create_fast:
+        elif create_mode == "📄 Nạp đề từ file":
             st.subheader("📄 Tải lên trực tiếp 1 đề thi hoàn chỉnh")
             c_grade, c_chap = st.columns([1, 2.5])
             grade_sel = c_grade.selectbox("Chọn Khối lớp áp dụng", ["12", "11", "10", "9", "8", "7", "6"])
@@ -2992,21 +3064,25 @@ if st.session_state.role == "teacher":
                             "show_solutions": False,
                             "is_active": True
                         }).execute()
-                        st.success("🎉 Đã tạo đề thi thành công! Bạn có thể quản lý ở tab **Quản lý đề**.")
+                        clear_all_data_caches()
+                        st.success("🎉 Đã tạo đề thi thành công! Bạn có thể quản lý ở mục **Quản lý đề**.")
                         st.rerun()
 
     # -----------------------------------------------------------------
-    # TAB 3: QUẢN LÝ ĐỀ (GỘP KHO ĐỀ THI ĐÃ SOẠN & BẢNG ĐIỂM / GIÁM SÁT / THỐNG KÊ)
+    # PHÂN KHU 3: QUẢN LÝ ĐỀ (SIÊU NHẸ: CHỈ TẢI NỘI DUNG ĐỀ KHI BẤM MỞ)
     # -----------------------------------------------------------------
-    with t_manage:
-        sub_mgr_list, sub_mgr_res = st.tabs([
-            "📚 Kho đề thi",
-            "📊 Điểm & Giám sát"
-        ])
+    elif active_nav == "📂 Quản lý đề":
+        mgr_mode = st.radio(
+            "Chế độ quản lý đề:",
+            ["📚 Kho đề thi", "📊 Điểm & Giám sát"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="mgr_exam_sub_mode"
+        )
 
-        with sub_mgr_list:
+        if mgr_mode == "📚 Kho đề thi":
             st.subheader("📚 Danh sách Đề thi đã soạn")
-            exams_data = supabase.table("exams").select("*").order("grade", desc=True).order("chapter").order("id", desc=True).execute().data
+            exams_data = fetch_all_exams_meta()
             if not exams_data:
                 st.info("Chưa có đề thi nào trong hệ thống.")
             else:
@@ -3017,88 +3093,86 @@ if st.session_state.role == "teacher":
                     grouped_exams.setdefault(g, {}).setdefault(ch, []).append(ex)
 
                 for g, chaps in grouped_exams.items():
-                    with st.expander(f"📁 KHỐI {g} ({sum(len(v) for v in chaps.values())} đề thi)", expanded=True):
+                    with st.expander(f"📁 KHỐI {g} — {sum(len(v) for v in chaps.values())} đề thi", expanded=True):
                         for ch, ex_list in chaps.items():
                             st.markdown(f"##### 📌 {ch}")
                             for ex in ex_list:
-                                ex_qs = ex.get("questions", [])
-                                c1, c2, c3, c4, c5 = st.columns([3.2, 1.5, 1.5, 1.6, 1.2])
-                                c1.write(f"**#{ex['id']} - {ex['title']}** ({ex['duration']}p — {len(ex_qs)} câu)")
+                                c1, c2, c3, c4, c5 = st.columns([3.2, 1.4, 1.4, 1.7, 1.2])
+                                c1.write(f"**#{ex['id']} - {ex['title']}** — {ex['duration']} phút")
                                 show_sol = c2.toggle("Mở lời giải", value=ex["show_solutions"], key=f"sol_{ex['id']}")
                                 is_act = c3.toggle("Mở phòng thi", value=ex["is_active"], key=f"act_{ex['id']}")
                                 if show_sol != ex["show_solutions"] or is_act != ex["is_active"]:
                                     supabase.table("exams").update({"show_solutions": show_sol, "is_active": is_act}).eq("id", ex["id"]).execute()
+                                    clear_all_data_caches()
                                     st.rerun()
-                                c4.download_button(
-                                    "📥 Tải .tex",
-                                    build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
-                                    f"de_thi_{ex['id']}.tex",
-                                    "text/plain",
-                                    key=f"dl_tex_ex_{ex['id']}",
-                                    use_container_width=True
-                                )
+                                open_view = c4.toggle("👁️ Xem / Sửa / .tex", value=False, key=f"open_ex_view_{ex['id']}")
                                 if c5.button("🗑️ Xóa đề", key=f"del_{ex['id']}", use_container_width=True):
                                     confirm_delete_exam_dialog(ex["id"], ex["title"])
 
-                                with st.expander(f"👁️ Xem toàn bộ đề, Tải LaTeX, Sửa phương án & Đổi câu hỏi của đề #{ex['id']} - {ex['title']}"):
-                                    ex_dl1, ex_dl2 = st.columns(2)
-                                    ex_dl1.download_button(
-                                        "📄 Tải mã LaTeX dạng khối câu hỏi",
-                                        build_latex_export_content(ex_qs, title=ex["title"], full_document=False).encode("utf-8"),
-                                        f"de_{ex['id']}_ex_blocks.tex",
-                                        "text/plain",
-                                        key=f"dl_blk_{ex['id']}",
-                                        use_container_width=True
-                                    )
-                                    ex_dl2.download_button(
-                                        "📘 Tải file LaTeX hoàn chỉnh",
-                                        build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
-                                        f"de_{ex['id']}_full_doc.tex",
-                                        "text/plain",
-                                        key=f"dl_full_{ex['id']}",
-                                        use_container_width=True
-                                    )
-                                    st.divider()
-                                    for q_idx, q_item in enumerate(ex_qs):
-                                        ec1, ec2 = st.columns([5.8, 1.2])
-                                        with ec1:
-                                            render_question_card(q_item, f"Câu {q_idx + 1}")
-                                        with ec2:
-                                            if st.button("🔄 Đổi câu khác", key=f"swap_pub_{ex['id']}_{q_idx}", use_container_width=True):
-                                                rep_q = find_replacement_question(q_item, ex_qs)
-                                                if rep_q:
-                                                    ex_qs[q_idx] = rep_q
-                                                    supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                                    st.toast(f"✅ Đã đổi Câu {q_idx + 1} trong đề #{ex['id']}!")
-                                                    st.rerun()
-                                                else:
-                                                    st.warning("Không tìm thấy câu hỏi khác cùng Bài/Mức độ trong Ngân hàng!")
-                                            if st.button("🗑️ Xóa câu", key=f"del_q_pub_{ex['id']}_{q_idx}", use_container_width=True):
-                                                ex_qs.pop(q_idx)
-                                                for r_i, r_q in enumerate(ex_qs):
-                                                    r_q["id"] = f"q_{r_i + 1}"
-                                                supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                                st.rerun()
-
-                                        pub_uid = f"pub_{ex['id']}_{q_idx}_{q_item.get('question_hash', '')[:6]}"
-                                        with st.expander(f"✏️ Sửa nội dung & các phương án Câu {q_idx + 1} của đề #{ex['id']}"):
-                                            p_tag, p_stem, p_opts, p_stmts, p_sa, p_sol = render_question_edit_controls(q_item, pub_uid)
-                                            if st.button("💾 Lưu sửa câu này vào Đề thi", key=f"save_pub_{pub_uid}", type="primary"):
-                                                ex_qs[q_idx] = apply_quick_edit_to_question(
-                                                    q_item, p_tag, p_stem, p_sol, new_short_ans=p_sa, new_options=p_opts, new_statements=p_stmts
-                                                )
-                                                supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
-                                                st.success(f"Đã cập nhật Câu {q_idx + 1} trong đề #{ex['id']}!")
-                                                st.rerun()
+                                if open_view:
+                                    ex_qs = list(fetch_exam_questions_cached(ex["id"]))
+                                    with st.container(border=True):
+                                        ex_dl1, ex_dl2 = st.columns(2)
+                                        ex_dl1.download_button(
+                                            "📄 Tải mã LaTeX dạng khối câu hỏi",
+                                            build_latex_export_content(ex_qs, title=ex["title"], full_document=False).encode("utf-8"),
+                                            f"de_{ex['id']}_ex_blocks.tex",
+                                            "text/plain",
+                                            key=f"dl_blk_{ex['id']}",
+                                            use_container_width=True
+                                        )
+                                        ex_dl2.download_button(
+                                            "📘 Tải file LaTeX hoàn chỉnh",
+                                            build_latex_export_content(ex_qs, title=ex["title"], full_document=True).encode("utf-8"),
+                                            f"de_{ex['id']}_full_doc.tex",
+                                            "text/plain",
+                                            key=f"dl_full_{ex['id']}",
+                                            use_container_width=True
+                                        )
                                         st.divider()
+                                        for q_idx, q_item in enumerate(ex_qs):
+                                            ec1, ec2 = st.columns([5.8, 1.2])
+                                            with ec1:
+                                                render_question_card(q_item, f"Câu {q_idx + 1}")
+                                            with ec2:
+                                                if st.button("🔄 Đổi câu khác", key=f"swap_pub_{ex['id']}_{q_idx}", use_container_width=True):
+                                                    rep_q = find_replacement_question(q_item, ex_qs)
+                                                    if rep_q:
+                                                        ex_qs[q_idx] = rep_q
+                                                        supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                        fetch_exam_questions_cached.clear()
+                                                        st.toast(f"✅ Đã đổi Câu {q_idx + 1} trong đề #{ex['id']}!")
+                                                        st.rerun()
+                                                    else:
+                                                        st.warning("Không tìm thấy câu hỏi khác cùng Bài/Mức độ trong Ngân hàng!")
+                                                if st.button("🗑️ Xóa câu", key=f"del_q_pub_{ex['id']}_{q_idx}", use_container_width=True):
+                                                    ex_qs.pop(q_idx)
+                                                    for r_i, r_q in enumerate(ex_qs):
+                                                        r_q["id"] = f"q_{r_i + 1}"
+                                                    supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                    fetch_exam_questions_cached.clear()
+                                                    st.rerun()
 
-        with sub_mgr_res:
-            exams_list = supabase.table("exams").select("*").order("id", desc=True).execute().data
+                                            pub_uid = f"pub_{ex['id']}_{q_idx}_{q_item.get('question_hash', '')[:6]}"
+                                            with st.expander(f"✏️ Sửa nội dung & các phương án Câu {q_idx + 1} của đề #{ex['id']}"):
+                                                p_tag, p_stem, p_opts, p_stmts, p_sa, p_sol = render_question_edit_controls(q_item, pub_uid)
+                                                if st.button("💾 Lưu sửa câu này vào Đề thi", key=f"save_pub_{pub_uid}", type="primary"):
+                                                    ex_qs[q_idx] = apply_quick_edit_to_question(
+                                                        q_item, p_tag, p_stem, p_sol, new_short_ans=p_sa, new_options=p_opts, new_statements=p_stmts
+                                                    )
+                                                    supabase.table("exams").update({"questions": ex_qs}).eq("id", ex["id"]).execute()
+                                                    fetch_exam_questions_cached.clear()
+                                                    st.success(f"Đã cập nhật Câu {q_idx + 1} trong đề #{ex['id']}!")
+                                                    st.rerun()
+                                            st.divider()
+
+        elif mgr_mode == "📊 Điểm & Giám sát":
+            exams_list = sorted(fetch_all_exams_meta(), key=lambda x: x["id"], reverse=True)
             if not exams_list:
                 st.info("Chưa có đề thi nào.")
             else:
                 sel_c1, sel_c2 = st.columns([4.5, 1.5])
-                selected_exam = sel_c1.selectbox(
+                selected_exam_meta = sel_c1.selectbox(
                     "📌 Chọn đề thi để xem bảng điểm, thống kê & giám sát:",
                     exams_list,
                     format_func=lambda x: f"[Khối {x.get('grade','12')} - {x.get('chapter','')}] #{x['id']} - {x['title']}"
@@ -3109,6 +3183,8 @@ if st.session_state.role == "teacher":
                         st.toast("✅ Đã làm mới bảng điểm của đề thi!")
                         st.rerun()
 
+                selected_exam = dict(selected_exam_meta)
+                selected_exam["questions"] = fetch_exam_questions_cached(selected_exam["id"])
                 subs = supabase.table("submissions").select("*, students(full_name, class_name)").eq("exam_id", selected_exam["id"]).execute().data
 
                 if not subs:
@@ -3116,15 +3192,19 @@ if st.session_state.role == "teacher":
                 else:
                     item_stats = analyze_exam_items(selected_exam["questions"], subs)
 
-                    xlsx_report_bytes = build_exam_report_xlsx(selected_exam, subs, item_stats)
-                    st.download_button(
-                        "📥 TẢI TOÀN BỘ DỮ LIỆU BÀI THI & HÌNH ẢNH CAMERA RA FILE EXCEL (.XLSX)",
-                        xlsx_report_bytes,
-                        f"bao_cao_ket_qua_va_anh_camera_de_{selected_exam['id']}.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        use_container_width=True
-                    )
+                    # Chỉ dựng file Excel kèm ảnh webcam khi bấm nút (không dựng ngầm gây nặng RAM)
+                    if st.button("📦 Chuẩn bị file Excel báo cáo kết quả & ảnh camera (.xlsx)", key=f"prep_xlsx_{selected_exam['id']}", type="primary", use_container_width=True):
+                        with st.spinner("Đang đóng gói bảng điểm và chèn ảnh camera vào Excel..."):
+                            st.session_state[f"xlsx_bytes_{selected_exam['id']}"] = build_exam_report_xlsx(selected_exam, subs, item_stats)
+                    if st.session_state.get(f"xlsx_bytes_{selected_exam['id']}"):
+                        st.download_button(
+                            "📥 TẢI FILE EXCEL BÁO CÁO & HÌNH ẢNH CAMERA (.XLSX)",
+                            st.session_state[f"xlsx_bytes_{selected_exam['id']}"],
+                            f"bao_cao_ket_qua_va_anh_camera_de_{selected_exam['id']}.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
 
                     sub_tab1, sub_tab2, sub_tab3 = st.tabs([
                         "📋 Bảng điểm",
@@ -3203,9 +3283,9 @@ if st.session_state.role == "teacher":
                                         st.image(snap["img"], caption=f"Lúc: {snap['time']}")
 
     # -----------------------------------------------------------------
-    # TAB 4: QUẢN LÝ HỌC SINH (ĐÃ FIX LỖI STREAMLITWIDGETALREADYINSTANTIATEDERROR)
+    # PHÂN KHU 4: QUẢN LÝ HỌC SINH (CHỈ CHẠY KHI GIÁO VIÊN CHỌN MỞ)
     # -----------------------------------------------------------------
-    with t_stu:
+    elif active_nav == "👥 Quản lý học sinh":
         st.subheader("1. Thêm Học sinh vào Lớp")
 
         add_tab_excel, add_tab_manual = st.tabs([
@@ -3256,6 +3336,7 @@ if st.session_state.role == "teacher":
                                 "password": str(row[col_pwd]).strip()
                             })
                         supabase.table("students").upsert(records, on_conflict="username").execute()
+                        fetch_all_students_cached.clear()
                         st.success(f"🎉 Đã cập nhật thành công {len(records)} tài khoản học sinh!")
                         st.rerun()
                 except Exception as e:
@@ -3277,12 +3358,13 @@ if st.session_state.role == "teacher":
                         "username": m_user.strip(),
                         "password": m_pass.strip() or "123"
                     }], on_conflict="username").execute()
+                    fetch_all_students_cached.clear()
                     st.success(f"✅ Đã thêm học sinh **{m_name.strip()}** vào lớp **{m_cls.strip().upper()}**!")
                     st.rerun()
 
         st.divider()
         st.subheader("2. Danh sách Học sinh theo từng Lớp")
-        all_stu = supabase.table("students").select("*").order("class_name").order("username").execute().data
+        all_stu = fetch_all_students_cached()
         if not all_stu:
             st.info("Chưa có học sinh nào trong hệ thống.")
         else:
@@ -3338,6 +3420,7 @@ if st.session_state.role == "teacher":
                             supabase.table("students").upsert(to_update_records, on_conflict="username").execute()
                         # Tăng bộ đếm cls_ver thay vì gán lại key của checkbox đang hiển thị
                         st.session_state[f"cls_ver_{cls_name}"] = cls_ver + 1
+                        fetch_all_students_cached.clear()
                         st.toast(f"✅ Đã xóa {len(to_delete_users)} học sinh và cập nhật lớp {cls_name}!")
                         st.rerun()
 
@@ -3360,7 +3443,7 @@ elif st.session_state.role == "student":
     stu = st.session_state.user
     stu_grade = extract_grade_from_class(stu["class_name"])
 
-    active_exams = supabase.table("exams").select("*").eq("is_active", True).eq("grade", stu_grade).order("chapter").order("id", desc=True).execute().data
+    active_exams = fetch_active_exams_meta_for_grade(stu_grade)
 
     if not active_exams:
         st.info(f"Hiện tại chưa có bài kiểm tra nào đang mở cho **Khối {stu_grade}**.")
@@ -3399,7 +3482,7 @@ elif st.session_state.role == "student":
         st.stop()
 
     submission = sub_res[0]
-    questions = exam["questions"]
+    questions = fetch_exam_questions_cached(exam["id"])
     scoring_cfg = exam.get("scoring_config") or {"p1": 0.25, "p2": 1.0, "p3": 0.5, "p4": 1.0}
     seed = submission["seed"]
     saved_answers = submission.get("answers") or {}
