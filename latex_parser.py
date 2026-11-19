@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import shutil
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from kntt_mapping import decode_kntt_tag
 
 PARSER_VERSION = "V6.2 - Fix TikZ Graph/3D \def, tkz-tab BBT, unwrap scalebox & error .tex export"
@@ -714,14 +715,39 @@ def parse_single_block(block_body_with_comments, index, env_type="ex"):
     return parsed_q
 
 
-def parse_exam_tex(tex_content):
-    r"""Đọc toàn bộ file .tex/.txt (cả môi trường ex và bt) theo đúng thứ tự xuất hiện"""
+def parse_exam_tex(tex_content, progress_callback=None, max_workers=4):
+    r"""Đọc toàn bộ file .tex/.txt (cả môi trường ex và bt) song song đa luồng, giữ đúng thứ tự xuất hiện"""
     pattern = re.compile(r'\\begin\{(ex|bt)\}(.*?)\\end\{\1\}', flags=re.DOTALL)
-    questions = []
-    for idx, match in enumerate(pattern.finditer(tex_content)):
-        env_type = match.group(1)
-        block_body = match.group(2)
-        parsed = parse_single_block(block_body, idx + 1, env_type=env_type)
-        if parsed:
-            questions.append(parsed)
-    return questions
+    matches = [(idx, m.group(1), m.group(2)) for idx, m in enumerate(pattern.finditer(tex_content))]
+    total = len(matches)
+    if total == 0:
+        return []
+
+    if total <= 3 or max_workers <= 1:
+        questions = []
+        for idx, env_type, block_body in matches:
+            parsed = parse_single_block(block_body, idx + 1, env_type=env_type)
+            if parsed:
+                questions.append(parsed)
+            if progress_callback:
+                progress_callback(idx + 1, total)
+        return questions
+
+    results = [None] * total
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=min(max_workers, total)) as executor:
+        future_to_idx = {
+            executor.submit(parse_single_block, block_body, idx + 1, env_type): idx
+            for idx, env_type, block_body in matches
+        }
+        for fut in as_completed(future_to_idx):
+            idx = future_to_idx[fut]
+            try:
+                results[idx] = fut.result()
+            except Exception:
+                results[idx] = None
+            done_count += 1
+            if progress_callback:
+                progress_callback(done_count, total)
+
+    return [q for q in results if q is not None]

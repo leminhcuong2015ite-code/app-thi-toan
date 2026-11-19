@@ -4,6 +4,7 @@ from supabase import create_client
 import pandas as pd
 import random
 import datetime
+import time
 import re
 import hashlib
 import io
@@ -446,7 +447,27 @@ render_app_header()
 def init_db():
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
+    for mod_path in ("supabase.lib.client_options", "supabase"):
+        try:
+            mod = importlib.import_module(mod_path)
+            ClientOptions = getattr(mod, "ClientOptions", None)
+            if ClientOptions is not None:
+                return create_client(url, key, options=ClientOptions(postgrest_client_timeout=60))
+        except Exception:
+            pass
     return create_client(url, key)
+
+def run_with_retry(fn, retries=3, delay=1.2):
+    """Tự động thử lại khi gặp lỗi mạng hoặc httpx.ReadTimeout từ Supabase"""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(delay * (attempt + 1))
+    raise last_err
 
 try:
     supabase = init_db()
@@ -510,20 +531,23 @@ def clear_edit_widget_state(prefixes=("st_tag_", "st_stem_", "st_sa_", "st_sol_"
         del st.session_state[k]
 
 # ================= HÀM TẢI TOÀN BỘ METADATA NGÂN HÀNG ĐỂ THỐNG KÊ =================
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_bank_metadata():
-    """Tải danh sách siêu dữ liệu (không kèm ảnh SVG nặng) của toàn bộ câu hỏi trong Ngân hàng để thống kê tức thì"""
+    """Tải danh sách siêu dữ liệu (không kèm ảnh SVG nặng) của toàn bộ câu hỏi trong Ngân hàng có cache + tự động thử lại"""
     all_rows = []
     batch_size = 1000
     offset = 0
     while True:
-        res = (
-            supabase.table("question_bank")
-            .select("id, tag_id, grade, chapter_code, chapter_name, lesson_code, lesson_name, level_code, level_name, part")
-            .order("id")
-            .range(offset, offset + batch_size - 1)
-            .execute()
-            .data
-        )
+        def _query(off=offset):
+            return (
+                supabase.table("question_bank")
+                .select("id, tag_id, grade, chapter_code, chapter_name, lesson_code, lesson_name, level_code, level_name, part")
+                .order("id")
+                .range(off, off + batch_size - 1)
+                .execute()
+                .data
+            )
+        res = run_with_retry(_query, retries=3, delay=1.2)
         if not res:
             break
         all_rows.extend(res)
@@ -1771,6 +1795,7 @@ with st.sidebar:
         st.write("👨‍🏫 **Chế độ Giáo viên Quản trị**")
         st.caption(f"⚙️ Bộ biên dịch: `{PARSER_VERSION}`")
         if st.button("🔄 Làm mới dữ liệu", use_container_width=True, type="primary"):
+            fetch_all_bank_metadata.clear()
             st.toast("✅ Đã cập nhật dữ liệu mới nhất từ hệ thống!")
             st.rerun()
     if st.button("🚪 Đăng xuất", use_container_width=True):
@@ -1787,6 +1812,7 @@ if st.session_state.role == "teacher":
     top_c1, top_c2 = st.columns([5.2, 1.8])
     with top_c2:
         if st.button("🔄 Làm mới kết quả & dữ liệu", key="top_refresh_btn", type="primary", use_container_width=True):
+            fetch_all_bank_metadata.clear()
             st.toast("✅ Đã tải lại kết quả thi và dữ liệu mới nhất!")
             st.rerun()
 
@@ -1802,7 +1828,11 @@ if st.session_state.role == "teacher":
     # -----------------------------------------------------------------
     with t_bank:
         with st.expander("📊 0. Thống kê toàn bộ Ngân hàng câu hỏi & Lưu mã LaTeX", expanded=True):
-            all_meta = fetch_all_bank_metadata()
+            try:
+                all_meta = fetch_all_bank_metadata()
+            except Exception as e:
+                st.warning(f"⚠️ Kết nối Supabase tạm thời phản hồi chậm ({type(e).__name__}). Thầy vui lòng bấm nút **🔄 Làm mới kết quả & dữ liệu** ở góc trên phải.")
+                all_meta = []
             if not all_meta:
                 st.info("📭 Ngân hàng câu hỏi hiện đang trống. Hãy nạp câu hỏi ở mục 1 bên dưới nhé!")
             else:
@@ -1984,43 +2014,48 @@ if st.session_state.role == "teacher":
             file_sig = f"{PARSER_VERSION}_{bank_tex_file.name}_{bank_tex_file.size}_{missing_id_mode}_{fb_grade}_{fb_chap_code}_{fb_lesson_code}_{fb_lvl_code}"
             if st.session_state.get("staged_file_sig") != file_sig:
                 raw_bank_tex = bank_tex_file.read().decode("utf-8", errors="ignore")
-                with st.spinner("Đang biên dịch LaTeX/TikZ và kiểm tra mã ID câu hỏi..."):
-                    parsed_qs = parse_exam_tex(raw_bank_tex)
-                    processed_qs = []
-                    dropped_no_id = 0
-                    dropped_ext_img = []
+                prog_bar = st.progress(0.0, text="Đang phân tích và biên dịch LaTeX/TikZ (đa luồng)...")
+                def _on_parse_prog(done, total):
+                    pct = min(1.0, done / max(1, total))
+                    prog_bar.progress(pct, text=f"Đang biên dịch câu hỏi LaTeX/TikZ: {done}/{total} câu...")
+                parsed_qs = parse_exam_tex(raw_bank_tex, progress_callback=_on_parse_prog, max_workers=4)
+                prog_bar.empty()
+                st.session_state["raw_parsed_total_count"] = len(parsed_qs)
+                processed_qs = []
+                dropped_no_id = 0
+                dropped_ext_img = []
 
-                    dropped_ext_img_records = []
-                    for q in parsed_qs:
-                        q["_uid"] = str(uuid.uuid4())[:8]
-                        has_inc, inc_paths = has_external_includegraphics(q)
-                        if has_inc:
-                            reason_inc = f"Chứa lệnh chèn ảnh ngoài \\includegraphics{{{chr(44).join(inc_paths)}}}"
-                            dropped_ext_img.append(
-                                f"**Câu {q.get('id', '?')}** (Mã ID: `{q.get('tag_id', 'Chưa gắn mã')}`) — `{reason_inc}`"
-                            )
-                            dropped_ext_img_records.append({"q": q, "reason": reason_inc})
+                dropped_ext_img_records = []
+                for q in parsed_qs:
+                    q["_uid"] = str(uuid.uuid4())[:8]
+                    has_inc, inc_paths = has_external_includegraphics(q)
+                    if has_inc:
+                        reason_inc = f"Chứa lệnh chèn ảnh ngoài \\includegraphics{{{chr(44).join(inc_paths)}}}"
+                        dropped_ext_img.append(
+                            f"**Câu {q.get('id', '?')}** (Mã ID: `{q.get('tag_id', 'Chưa gắn mã')}`) — `{reason_inc}`"
+                        )
+                        dropped_ext_img_records.append({"q": q, "reason": reason_inc})
+                        continue
+                    sanitize_question_obj(q)
+                    if q.get("tag_id") == "Chưa gắn mã":
+                        if missing_id_mode.startswith("🗑️"):
+                            dropped_no_id += 1
                             continue
-                        sanitize_question_obj(q)
-                        if q.get("tag_id") == "Chưa gắn mã":
-                            if missing_id_mode.startswith("🗑️"):
-                                dropped_no_id += 1
-                                continue
-                            elif missing_id_mode.startswith("📌"):
-                                default_tag = f"{fb_grade}-{fb_chap_code}-{fb_lesson_code}-{fb_lvl_code}"
-                                meta = decode_kntt_tag(default_tag)
-                                if meta:
-                                    q.update(meta)
-                        processed_qs.append(q)
+                        elif missing_id_mode.startswith("📌"):
+                            default_tag = f"{fb_grade}-{fb_chap_code}-{fb_lesson_code}-{fb_lvl_code}"
+                            meta = decode_kntt_tag(default_tag)
+                            if meta:
+                                q.update(meta)
+                    processed_qs.append(q)
 
-                    clear_edit_widget_state()
-                    st.session_state["staged_bank_qs"] = processed_qs
-                    st.session_state["staged_marked_remove"] = set()
-                    st.session_state["dropped_no_id_count"] = dropped_no_id
-                    st.session_state["dropped_ext_img_list"] = dropped_ext_img
-                    st.session_state["dropped_ext_img_records"] = dropped_ext_img_records
-                    st.session_state["staged_file_sig"] = file_sig
-                    st.session_state["staged_ver"] = st.session_state.get("staged_ver", 0) + 1
+                clear_edit_widget_state()
+                st.session_state["staged_bank_qs"] = processed_qs
+                st.session_state["staged_marked_remove"] = set()
+                st.session_state["dropped_no_id_count"] = dropped_no_id
+                st.session_state["dropped_ext_img_list"] = dropped_ext_img
+                st.session_state["dropped_ext_img_records"] = dropped_ext_img_records
+                st.session_state["staged_file_sig"] = file_sig
+                st.session_state["staged_ver"] = st.session_state.get("staged_ver", 0) + 1
 
             staged_qs = st.session_state.get("staged_bank_qs", [])
             dropped_cnt = st.session_state.get("dropped_no_id_count", 0)
@@ -2305,20 +2340,56 @@ if st.session_state.role == "teacher":
                             }
 
                         db_records = list(unique_records_map.values())
-                        try:
-                            for i in range(0, len(db_records), 50):
-                                batch = db_records[i:i + 50]
-                                supabase.table("question_bank").upsert(batch, on_conflict="question_hash").execute()
-                            msg = f"🎉 Đã nạp thành công **{len(db_records)} câu hỏi** vào Ngân hàng!"
-                            if rejected_on_save_records:
-                                msg += f" (Đã tự động loại bỏ **{len(rejected_on_save_records)} câu bị lỗi / thiếu ID** — bạn có thể tải file `.tex` của các câu bị loại bỏ ở ngay nút bên dưới để sửa lại trên máy)."
-                            st.success(msg)
-                            st.session_state["last_rejected_tex_content"] = (
-                                build_error_questions_tex(rejected_on_save_records) if rejected_on_save_records else ""
+                        dup_removed = len(candidate_save_qs) - len(db_records)
+                        save_prog = st.progress(0.0, text=f"Đang nạp 0/{len(db_records)} câu hỏi lên Supabase...")
+                        saved_ok = 0
+                        failed_records = []
+                        batch_sz = 12
+                        total_rec = len(db_records)
+
+                        for i in range(0, total_rec, batch_sz):
+                            batch = db_records[i:i + batch_sz]
+                            try:
+                                def _do_upsert(b=batch):
+                                    return supabase.table("question_bank").upsert(
+                                        b, on_conflict="question_hash", returning="minimal"
+                                    ).execute()
+                                run_with_retry(_do_upsert, retries=3, delay=1.5)
+                                saved_ok += len(batch)
+                            except Exception:
+                                # Nếu cả lô gặp timeout/lỗi mạng, tách ra nạp từng câu để không bao giờ bị đứt giữa chừng
+                                for single_rec in batch:
+                                    try:
+                                        def _do_one(r=single_rec):
+                                            return supabase.table("question_bank").upsert(
+                                                [r], on_conflict="question_hash", returning="minimal"
+                                            ).execute()
+                                        run_with_retry(_do_one, retries=3, delay=1.2)
+                                        saved_ok += 1
+                                    except Exception as e_one:
+                                        failed_records.append((single_rec.get("tag_id", "?"), str(e_one)))
+                            save_prog.progress(
+                                min(1.0, (i + len(batch)) / max(1, total_rec)),
+                                text=f"Đang nạp lên Supabase: {min(i + len(batch), total_rec)}/{total_rec} câu (Thành công: {saved_ok})..."
                             )
-                            st.session_state["last_rejected_tex_count"] = len(rejected_on_save_records)
-                        except Exception as e:
-                            st.error(f"⚠️ Chi tiết lỗi từ Supabase: {e}")
+
+                        save_prog.empty()
+                        fetch_all_bank_metadata.clear()
+
+                        msg = f"🎉 Đã nạp thành công **{saved_ok}/{total_rec} câu hỏi** vào Ngân hàng!"
+                        if dup_removed > 0:
+                            msg += f" (Tự động gộp {dup_removed} câu trùng nội dung trong file)."
+                        if rejected_on_save_records:
+                            msg += f" Đã loại bỏ **{len(rejected_on_save_records)} câu** lỗi/thiếu ID/tích chọn bỏ — thầy có thể tải file `.tex` bên dưới."
+                        if saved_ok > 0:
+                            st.success(msg)
+                        if failed_records:
+                            st.error(f"⚠️ Có **{len(failed_records)} câu** chưa lưu được do mạng/Supabase chậm: " + ", ".join(x[0] for x in failed_records[:10]))
+
+                        st.session_state["last_rejected_tex_content"] = (
+                            build_error_questions_tex(rejected_on_save_records) if rejected_on_save_records else ""
+                        )
+                        st.session_state["last_rejected_tex_count"] = len(rejected_on_save_records)
 
                 if st.session_state.get("last_rejected_tex_content"):
                     st.download_button(
@@ -2468,6 +2539,7 @@ if st.session_state.role == "teacher":
                         pass
                     clear_edit_widget_state()
                     st.session_state["db_ver"] = st.session_state.get("db_ver", 0) + 1
+                    fetch_all_bank_metadata.clear()
                     st.success(f"✅ Đã xóa {len(db_error_records)} câu bị lỗi khỏi Ngân hàng!")
                     st.rerun()
 
@@ -2534,6 +2606,7 @@ if st.session_state.role == "teacher":
                                 pass
                             clear_edit_widget_state()
                             st.session_state["db_ver"] = db_ver + 1
+                            fetch_all_bank_metadata.clear()
                             st.toast(f"Đã xóa câu #{item['id']} khỏi Ngân hàng!")
                             st.rerun()
 
@@ -2558,6 +2631,7 @@ if st.session_state.role == "teacher":
                             }).eq("id", item["id"]).execute()
                             clear_edit_widget_state()
                             st.session_state["db_ver"] = db_ver + 1
+                            fetch_all_bank_metadata.clear()
                             st.success(f"Đã cập nhật câu #{item['id']} thành công!")
                             st.rerun()
                     st.divider()
@@ -2590,6 +2664,7 @@ if st.session_state.role == "teacher":
                             supabase.rpc("reset_question_bank_id").execute()
                         except Exception:
                             supabase.table("question_bank").delete().gt("id", 0).execute()
+                        fetch_all_bank_metadata.clear()
                         st.success("✅ Đã xóa sạch TOÀN BỘ Ngân hàng câu hỏi và đặt lại ID Kho bắt đầu từ #1!")
                     else:
                         supabase.table("question_bank").delete().eq("grade", wipe_grade).execute()
@@ -2597,6 +2672,7 @@ if st.session_state.role == "teacher":
                             supabase.rpc("sync_question_bank_seq").execute()
                         except Exception:
                             pass
+                        fetch_all_bank_metadata.clear()
                         st.success(f"✅ Đã xóa sạch toàn bộ câu hỏi thuộc Khối {wipe_grade} và đồng bộ lại bộ đếm ID!")
                     st.rerun()
                 except Exception as e:
