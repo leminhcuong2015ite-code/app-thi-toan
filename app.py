@@ -632,23 +632,33 @@ def clear_all_data_caches():
     fetch_all_exams_meta.clear()
     fetch_all_students_cached.clear()
 
+def fetch_bank_rows_by_ids_safe(id_list, columns="*", chunk_size=8):
+    """Tải dữ liệu câu hỏi theo từng lô nhỏ (8 câu/lần) để tránh hoàn toàn lỗi statement_timeout của Supabase khi gặp hình TikZ tô miền nặng"""
+    if not id_list:
+        return []
+    id_map = {}
+    for i in range(0, len(id_list), chunk_size):
+        chunk = id_list[i:i + chunk_size]
+        rows = run_with_retry(
+            lambda c=chunk: supabase.table("question_bank").select(columns).in_("id", c).execute().data,
+            retries=3,
+            delay=0.8
+        )
+        for r in rows:
+            id_map[r["id"]] = r
+    return [id_map[i] for i in id_list if i in id_map]
+
 def fetch_all_bank_full_questions(grade_filter=None):
-    """Tải toàn bộ dữ liệu câu hỏi kèm raw_tex từ Ngân hàng để xuất file LaTeX (.tex)"""
-    all_rows = []
-    batch_size = 500
-    offset = 0
-    while True:
-        q_builder = supabase.table("question_bank").select("*").order("grade", desc=True).order("chapter_code").order("lesson_code").order("id")
-        if grade_filter and grade_filter != "Tất cả các Khối":
-            q_builder = q_builder.eq("grade", str(grade_filter))
-        res = q_builder.range(offset, offset + batch_size - 1).execute().data
-        if not res:
-            break
-        all_rows.extend(res)
-        if len(res) < batch_size:
-            break
-        offset += batch_size
-    return all_rows
+    """Tải toàn bộ dữ liệu câu hỏi kèm raw_tex từ Ngân hàng theo từng lô nhỏ để xuất file LaTeX (.tex) không bị timeout"""
+    meta_rows = fetch_all_bank_metadata()
+    if grade_filter and grade_filter != "Tất cả các Khối":
+        meta_rows = [r for r in meta_rows if str(r.get("grade")) == str(grade_filter)]
+    meta_rows = sorted(
+        meta_rows,
+        key=lambda r: (-(int(r.get("grade")) if str(r.get("grade", "")).isdigit() else 0), r.get("chapter_code", ""), r.get("lesson_code", ""), r.get("id", 0))
+    )
+    id_list = [r["id"] for r in meta_rows]
+    return fetch_bank_rows_by_ids_safe(id_list, columns="id, tag_id, raw_tex, part, question_data", chunk_size=15)
 
 # ================= HÀM KẾT XUẤT MÃ NGUỒN LATEX (.TEX) CHO NGÂN HÀNG & ĐỀ THI =================
 def question_to_latex_block(q):
@@ -2534,34 +2544,53 @@ if st.session_state.role == "teacher":
             b_col2.selectbox("Lọc theo Chương:", ["-- Chọn Chương --"], disabled=True, key="b_mgr_c_dis")
             b_col3.multiselect("Lọc theo Bài học:", [], disabled=True, key="b_mgr_l_dis")
 
-        bank_items = []
+        bank_meta_items = []
         if b_sel_g == "-- Chọn Khối --" or b_sel_c == "-- Chọn Chương --":
             st.info("👆 Chọn Khối và Chương ở trên để tải danh sách câu hỏi trong Ngân hàng.")
         else:
-            bank_items = supabase.table("question_bank").select("*").eq("grade", b_sel_g).eq("chapter_code", b_sel_c).order("id").execute().data
-            if b_sel_lessons:
-                bank_items = [item for item in bank_items if item["lesson_code"] in b_sel_lessons]
+            def _q_meta_sec2():
+                qb = (
+                    supabase.table("question_bank")
+                    .select("id, tag_id, grade, chapter_code, lesson_code, level_code, part")
+                    .eq("grade", b_sel_g)
+                    .eq("chapter_code", b_sel_c)
+                    .order("id")
+                )
+                if b_sel_lessons:
+                    qb = qb.in_("lesson_code", b_sel_lessons)
+                return qb.execute().data
+            bank_meta_items = run_with_retry(_q_meta_sec2, retries=3, delay=0.8)
 
-        if b_sel_g != "-- Chọn Khối --" and b_sel_c != "-- Chọn Chương --" and not bank_items:
+        if b_sel_g != "-- Chọn Khối --" and b_sel_c != "-- Chọn Chương --" and not bank_meta_items:
             st.info("Chưa có câu hỏi nào trong Ngân hàng thuộc Chương/Bài này.")
-        elif bank_items:
-            for it in bank_items:
-                qd_ref = it.get("question_data") or {}
-                if it.get("raw_tex") and not qd_ref.get("raw_tex"):
-                    qd_ref["raw_tex"] = it["raw_tex"]
+        elif bank_meta_items:
+            st.write(f"📊 **Hiện có `{len(bank_meta_items)}` câu hỏi trong mục đang chọn** *(tải phân trang siêu nhẹ theo từng trang, không bị timeout khi có nhiều hình vẽ lớn)*.")
 
-            ok_b = sum(1 for item in bank_items if "✅" in check_question_health(item["question_data"]))
-            warn_b = len(bank_items) - ok_b
-            st.write(
-                f"📊 **Hiện có `{len(bank_items)}` câu hỏi trong mục đang chọn** "
-                f"(🟢 `{ok_b}` câu hiển thị chuẩn | 🟠 `{warn_b}` câu có cảnh báo)"
-            )
+            act_b1, act_b2 = st.columns(2)
+            if act_b1.button(f"📦 Chuẩn bị file mã nguồn LaTeX ({len(bank_meta_items)} câu đang lọc)", use_container_width=True):
+                with st.spinner(f"Đang gom mã nguồn LaTeX của {len(bank_meta_items)} câu hỏi..."):
+                    all_ids_tex = [r["id"] for r in bank_meta_items]
+                    tex_rows = fetch_bank_rows_by_ids_safe(all_ids_tex, columns="id, tag_id, raw_tex, part, question_data", chunk_size=12)
+                    q_list_filtered_for_tex = []
+                    for it in tex_rows:
+                        qd_tmp = it.get("question_data") or {}
+                        if it.get("raw_tex") and not qd_tmp.get("raw_tex"):
+                            qd_tmp["raw_tex"] = it["raw_tex"]
+                        qd_tmp["tag_id"] = it.get("tag_id", qd_tmp.get("tag_id", ""))
+                        q_list_filtered_for_tex.append(qd_tmp)
+                    st.session_state["sec2_tex_blocks"] = build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=False)
+                    st.session_state["sec2_tex_full"] = build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=True)
+                    st.session_state["sec2_tex_key"] = f"{b_sel_g}_{b_sel_c}_{len(bank_meta_items)}"
 
-            if st.button("🔧 Biên dịch lại Bảng biến thiên & Dọn câu lỗi trong mục này", use_container_width=True):
+            if act_b2.button("🔧 Biên dịch lại Bảng biến thiên & Dọn câu lỗi trong mục này", use_container_width=True):
                 fixed_cnt = 0
                 removed_inc_cnt = 0
-                with st.spinner("Đang quét, biên dịch lại bảng biến thiên tkz-tab và dọn câu chứa \includegraphics..."):
-                    for it in bank_items:
+                fix_prog = st.progress(0.0, text="Đang quét và kiểm tra từng lô câu hỏi...")
+                all_ids_fix = [r["id"] for r in bank_meta_items]
+                for idx_c in range(0, len(all_ids_fix), 8):
+                    sub_ids = all_ids_fix[idx_c:idx_c + 8]
+                    sub_rows = fetch_bank_rows_by_ids_safe(sub_ids, columns="*", chunk_size=8)
+                    for it in sub_rows:
                         qd_cur = it.get("question_data") or {}
                         if it.get("raw_tex") and not qd_cur.get("raw_tex"):
                             qd_cur["raw_tex"] = it["raw_tex"]
@@ -2572,7 +2601,7 @@ if st.session_state.role == "teacher":
                             continue
                         raw_t = qd_cur.get("raw_tex", "")
                         if raw_t and not qd_cur.get("_manually_edited"):
-                            rep_list = parse_exam_tex(raw_t)
+                            rep_list = parse_exam_tex(raw_t, max_workers=1)
                             if rep_list:
                                 rp_q = rep_list[0]
                                 if rp_q.get("has_external_image"):
@@ -2588,110 +2617,90 @@ if st.session_state.role == "teacher":
                                 qd_cur["_parser_ver"] = PARSER_VERSION
                                 supabase.table("question_bank").update({"question_data": qd_cur}).eq("id", it["id"]).execute()
                                 fixed_cnt += 1
+                    fix_prog.progress(min(1.0, (idx_c + len(sub_ids)) / max(1, len(all_ids_fix))), text=f"Đã kiểm tra {min(idx_c + len(sub_ids), len(all_ids_fix))}/{len(all_ids_fix)} câu...")
+                fix_prog.empty()
+                clear_all_data_caches()
                 st.success(f"✅ Đã cập nhật lại {fixed_cnt} câu hỏi và tự động loại bỏ {removed_inc_cnt} câu chứa \includegraphics!")
                 st.rerun()
 
-            q_list_filtered_for_tex = []
-            for it in bank_items:
-                qd_tmp = it.get("question_data") or {}
-                if it.get("raw_tex") and not qd_tmp.get("raw_tex"):
-                    qd_tmp["raw_tex"] = it["raw_tex"]
-                qd_tmp["tag_id"] = it.get("tag_id", qd_tmp.get("tag_id", ""))
-                q_list_filtered_for_tex.append(qd_tmp)
-
-            tex_c1, tex_c2 = st.columns(2)
-            tex_c1.download_button(
-                f"📄 Tải mã LaTeX dạng khối ({len(bank_items)} câu)",
-                build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=False).encode("utf-8"),
-                f"ngan_hang_K{b_sel_g}_{b_sel_c}_ex.tex",
-                "text/plain",
-                use_container_width=True
-            )
-            tex_c2.download_button(
-                f"📘 Tải file LaTeX hoàn chỉnh ({len(bank_items)} câu)",
-                build_latex_export_content(q_list_filtered_for_tex, title=f"KHỐI {b_sel_g} - {b_avail_chaps[b_sel_c]}", full_document=True).encode("utf-8"),
-                f"ngan_hang_K{b_sel_g}_{b_sel_c}_full.tex",
-                "text/plain",
-                use_container_width=True
-            )
-
-            db_error_records = [
-                {"q": it["question_data"], "reason": check_question_health(it["question_data"]), "db_id": it["id"]}
-                for it in bank_items
-                if has_compile_or_latex_error(it["question_data"])
-            ]
-            if db_error_records:
-                db_err_c1, db_err_c2 = st.columns(2)
-                db_err_c1.download_button(
-                    f"📥 Tải file .tex riêng {len(db_error_records)} câu đang bị Lỗi TikZ / Sót lệnh trong mục này về máy sửa",
-                    build_error_questions_tex(db_error_records, title=f"CÂU HỎI LỖI KHỐI {b_sel_g} - {b_sel_c}").encode("utf-8"),
-                    f"cau_hoi_loi_K{b_sel_g}_{b_sel_c}.tex",
+            if st.session_state.get("sec2_tex_key") == f"{b_sel_g}_{b_sel_c}_{len(bank_meta_items)}" and st.session_state.get("sec2_tex_blocks"):
+                tex_c1, tex_c2 = st.columns(2)
+                tex_c1.download_button(
+                    f"📄 Tải mã LaTeX dạng khối ({len(bank_meta_items)} câu)",
+                    st.session_state["sec2_tex_blocks"].encode("utf-8"),
+                    f"ngan_hang_K{b_sel_g}_{b_sel_c}_ex.tex",
                     "text/plain",
                     use_container_width=True
                 )
-                if db_err_c2.button(
-                    f"🗑️ Xóa toàn bộ {len(db_error_records)} câu bị Lỗi TikZ / Sót lệnh khỏi mục đang lọc",
+                tex_c2.download_button(
+                    f"📘 Tải file LaTeX hoàn chỉnh ({len(bank_meta_items)} câu)",
+                    st.session_state["sec2_tex_full"].encode("utf-8"),
+                    f"ngan_hang_K{b_sel_g}_{b_sel_c}_full.tex",
+                    "text/plain",
                     use_container_width=True
-                ):
-                    for er in db_error_records:
-                        supabase.table("question_bank").delete().eq("id", er["db_id"]).execute()
-                    try:
-                        supabase.rpc("sync_question_bank_seq").execute()
-                    except Exception:
-                        pass
-                    clear_edit_widget_state()
-                    st.session_state["db_ver"] = st.session_state.get("db_ver", 0) + 1
-                    fetch_all_bank_metadata.clear()
-                    st.success(f"✅ Đã xóa {len(db_error_records)} câu bị lỗi khỏi Ngân hàng!")
-                    st.rerun()
+                )
 
             bank_flt1, bank_flt2, bank_flt3 = st.columns([2, 2, 1.5])
-            b_status_filter = bank_flt1.selectbox(
-                "Lọc theo trạng thái biên dịch:",
-                ["Tất cả câu hỏi", "⚠️ Chỉ xem câu có cảnh báo", "✅ Chỉ xem câu hiển thị tốt"],
-                key="bank_health_flt"
-            )
-            b_part_filter = bank_flt2.selectbox(
+            b_part_filter = bank_flt1.selectbox(
                 "Lọc theo Phần:",
                 ["Tất cả các phần", "Phần 1 (ABCD)", "Phần 2 (Đúng/Sai)", "Phần 3 (Trả lời ngắn)", "Phần 4 (Tự luận)"],
                 key="bank_part_flt"
             )
+            b_status_filter = bank_flt2.selectbox(
+                "Lọc trạng thái trên trang hiện tại:",
+                ["Tất cả câu hỏi", "⚠️ Chỉ xem câu có cảnh báo", "✅ Chỉ xem câu hiển thị tốt"],
+                key="bank_health_flt"
+            )
             b_page_opt = bank_flt3.selectbox(
                 "Số câu / trang:",
                 [20, 50, 100, "Tất cả"],
-                index=1,
+                index=0,
                 key="bank_page_size_sel"
             )
 
-            inspect_list = []
-            for item in bank_items:
-                h_str = check_question_health(item["question_data"])
-                if b_status_filter.startswith("⚠️") and "✅" in h_str:
+            filtered_meta = []
+            for m_item in bank_meta_items:
+                if b_part_filter.startswith("Phần 1") and m_item["part"] != 1:
                     continue
-                if b_status_filter.startswith("✅") and "✅" not in h_str:
+                if b_part_filter.startswith("Phần 2") and m_item["part"] != 2:
                     continue
-                if b_part_filter.startswith("Phần 1") and item["part"] != 1:
+                if b_part_filter.startswith("Phần 3") and m_item["part"] != 3:
                     continue
-                if b_part_filter.startswith("Phần 2") and item["part"] != 2:
+                if b_part_filter.startswith("Phần 4") and m_item["part"] != 4:
                     continue
-                if b_part_filter.startswith("Phần 3") and item["part"] != 3:
-                    continue
-                if b_part_filter.startswith("Phần 4") and item["part"] != 4:
-                    continue
-                inspect_list.append(item)
+                filtered_meta.append(m_item)
 
-            if not inspect_list:
+            if not filtered_meta:
                 st.info("Không có câu hỏi nào khớp với bộ lọc.")
             else:
                 db_ver = st.session_state.get("db_ver", 0)
-                b_page_size = len(inspect_list) if b_page_opt == "Tất cả" else int(b_page_opt)
-                b_total_pages = max(1, (len(inspect_list) + b_page_size - 1) // b_page_size)
+                b_page_size = len(filtered_meta) if b_page_opt == "Tất cả" else int(b_page_opt)
+                b_total_pages = max(1, (len(filtered_meta) + b_page_size - 1) // b_page_size)
                 b_cur_page = st.number_input(
-                    f"Trang danh sách câu hỏi (1 - {b_total_pages}, tổng {len(inspect_list)} câu):",
+                    f"Trang danh sách câu hỏi (1 - {b_total_pages}, tổng {len(filtered_meta)} câu):",
                     min_value=1, max_value=b_total_pages, value=1, key="bank_inspect_page"
                 )
                 b_start = (b_cur_page - 1) * b_page_size
-                for item in inspect_list[b_start:b_start + b_page_size]:
+                page_ids = [r["id"] for r in filtered_meta[b_start:b_start + b_page_size]]
+
+                # Chỉ tải dữ liệu đầy đủ cho ĐÚNG các câu trên trang hiện tại (mỗi lô 8 câu -> siêu nhanh, không bao giờ timeout!)
+                page_items = fetch_bank_rows_by_ids_safe(page_ids, columns="*", chunk_size=8)
+
+                inspect_list = []
+                for item in page_items:
+                    qd_tmp = item.get("question_data") or {}
+                    if item.get("raw_tex") and not qd_tmp.get("raw_tex"):
+                        qd_tmp["raw_tex"] = item["raw_tex"]
+                    h_str = check_question_health(qd_tmp)
+                    if b_status_filter.startswith("⚠️") and "✅" in h_str:
+                        continue
+                    if b_status_filter.startswith("✅") and "✅" not in h_str:
+                        continue
+                    inspect_list.append(item)
+
+                if not inspect_list:
+                    st.info("Không có câu hỏi nào trên trang này khớp bộ lọc trạng thái.")
+                for item in inspect_list:
                     qd = item["question_data"]
                     if item.get("raw_tex") and not qd.get("raw_tex"):
                         qd["raw_tex"] = item["raw_tex"]
